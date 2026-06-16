@@ -1,0 +1,28 @@
+# venv + build
+.venv/
+*.egg-info/
+
+# python caches
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# editor / OS / local agent state
+.DS_Store
+.idea/
+.vscode/
+.claude/
+
+# logs
+*.log
+
+# runtime + private data (app recreates data/ on first run)
+/data/
+
+# early research (excluded from the shipped repo)
+/spike/
+
+# real profile stays local — ship config/profile.example.yaml instead
+/config/profile.yaml

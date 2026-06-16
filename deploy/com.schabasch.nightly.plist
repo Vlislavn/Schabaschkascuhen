@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.schabasch.nightly</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__VENV_PYTHON__</string>
+        <string>-m</string>
+        <string>schabasch.cli</string>
+        <string>tick</string>
+        <string>--tertiary</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__REPO_DIR__</string>
+
+    <!-- Nightly at 03:00 local time -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>3</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/schabasch_nightly.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/schabasch_nightly_err.log</string>
+
+    <!-- Do NOT start on load — user enables explicitly with launchctl load -w -->
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>

@@ -1,0 +1,160 @@
+# EXAMPLE config — copy to config/profile.yaml and fill in your profile.
+#   cp config/profile.example.yaml config/profile.yaml
+# Everything below the `profile:` block is ready-to-run defaults; edit to taste.
+# Tip: `schabasch candidate --cv-path <your_cv.pdf>` extracts a structured skills
+# profile from your CV (used for CV↔vacancy fit). magnets/repellents are your
+# DESIRED / DISLIKED domains (aspirational is fine), NOT necessarily your background.
+
+profile:
+  summary: >
+    FILL IN YOUR PROFILE — one paragraph in your own words: role / seniority,
+    background, location, languages (your working language + any you're learning),
+    your core skills (fit is scored against these), the kinds of roles that suit
+    you, and any company / industry preferences. The richer this is, the better
+    the matching.
+  magnets:   [space, animals, public-sector, complex-projects, new-domain]   # domains you WANT
+  repellents: [remote-only, temp-agency, boring-role, slop-text]             # deal-breakers / turn-offs
+  scale:
+    "5": "Dream job: a strong magnet domain + your target-city hybrid + working-language team + good fit"
+    "4": "Almost: a good domain or strong company, one minus"
+    "3": "Just a job: neutral domain, workable location, nothing special"
+    "2": "Has a killer: hidden language requirement, disliked industry, remote-only, staffing agency"
+    "1": "Office mouse: native-language wall + boring role + buzzwords + no upside"
+
+search:
+  queries_en:
+    - machine learning engineer
+    - data scientist
+    - systems engineer
+    - process engineer
+    - program manager
+    - project manager
+    - software engineer
+    - research engineer
+    - aerospace engineer
+    - defense systems
+  queries_de:
+    - Ingenieur Raumfahrt
+    - Verteidigung Ingenieur
+    - Systementwickler
+    - Prozessingenieur
+    - Projektmanager
+    - Softwareentwickler
+    - öffentlicher Dienst Ingenieur
+    - Datenwissenschaftler
+  cities: ["Heidelberg, Germany", "Frankfurt am Main, Germany"]
+  hours_old: 48
+  results_wanted: 25
+  sources: [indeed, linkedin, arbeitsagentur]
+  agent_discovery: false   # opt-in ReAct web crawl — low yield with local qwen3:8b (needs SearXNG
+                           # / a stronger model to be productive); board scrapers do the real work
+  # target_companies: []   # optional override for the employers the discovery agent targets
+
+geo:
+  anchors:
+    Heidelberg: {lat: 49.3988, lon: 8.6724, radius_km: 40}
+    Frankfurt:  {lat: 50.1109, lon: 8.6821, radius_km: 40}
+
+llm:
+  normalizer_model: "qwen3:8b"
+  judge_model: "qwen3:8b"
+  num_ctx: 8192
+  temperature: 0.1
+  desc_truncate_chars: 6000
+  nightly_normalize_budget: 150
+  # Cascade roles (schabasch/llm_clients.py::make_llm_client). Each role → a client.
+  # Defaults keep everything on local ollama so it runs out of the box. deep_reasoning / sota / a
+  # local MLX agent are OPT-IN upgrades, used only when reachable (else they fall back to ollama).
+  # env_file: path/to/.env   # optional: a file holding OPENAI_API_KEY for the opt-in `sota` tier
+  roles:
+    normalizer: {client: ollama, model: "qwen3:8b"}
+    judge:      {client: ollama, model: "qwen3:8b"}
+    candidate:  {client: ollama, model: "qwen3:8b"}
+    # agent (investigate/discover, multi-turn ReAct). Default = ollama qwen3:8b so it runs out of the box.
+    # Optional upgrade: a local MLX 35B served via `bash scripts/serve_mlx.sh` on :8082 (OpenAI-compat) —
+    #   then set: {client: openai, model: <your-mlx-model>, base_url: "http://localhost:8082/v1", api_key: "ollama"}
+    agent:      {client: ollama, model: "qwen3:8b"}
+    # deep_reasoning DEFAULT = local ollama qwen3.5:4b (fast, ~3.4 GB, profile-aware pros/cons).
+    deep_reasoning: {client: ollama, model: "qwen3.5:4b"}
+    # sota = opt-in remote tier; needs OPENAI_API_KEY (never stored). Falls back to ollama if absent.
+    sota: {client: openai, model: "sota", base_url: "https://api.kather.ai/v1",
+           api_key_env: "OPENAI_API_KEY", max_tokens: 16000, timeout_s: 300}
+
+deep:                          # W3 abstractive card-enrichment (pros/cons + deep company + slop re-parse)
+  enable: true
+  slop_escalate_thr: 60        # (retained for reference; escalation removed — see enable_sota)
+  enable_sota: false           # escalation stays WITHIN small local models (no remote sota, no 35B
+                               # co-load); enrichment = single small tier + ollama reliability fallback
+  enrich_top_n: 12             # enrich only the daily slate set (cap) — keeps the heavy models off the pool
+
+memory:                        # Apple-silicon swap safety for the UI /fetch worker (schabasch/memory_guard.py)
+  guard_enabled: true
+  hard_floor_pct: 10           # refuse to start a heavy stage below this % free RAM
+  soft_floor_pct: 20           # warn / background-yield threshold
+  watchdog_interval_seconds: 15
+
+judge:
+  rubric_version: "v3-example"
+  fewshot_max: 6
+
+slate:
+  exploit: 8
+  explore: 2
+  max_per_company: 3
+  port: 8787
+  fresh_days: 14            # daily slate shows only jobs re-seen (last_seen) within N days — keeps it
+                            # current. /annotate is exempt (keeps the full backlog for labeling).
+  investigate_top_n: 6      # deep-search (agent) runs on the top-N SCORED cards each tick
+  annotate_batch: 30        # /annotate queue: max judged-but-unrated cards per page (cold-start chunk)
+  eval_min_pairs: 15        # /eval: below this many comparable label-pairs the page warns metrics are noisy
+  triage_blend: 0.5
+  xenc_blend: 0.3
+  # EFFECTIVE (slate sort) = fit_score · (1 + judge_blend_beta·judge_norm) · elig_score (de-conflate:
+  # fit leads, the magnet judge tie-breaks). Raise judge_blend_beta once enough 4/5 labels accrue.
+  judge_blend_beta: 0.0
+  quality_floor: 0.45       # an exploit slot must clear this `effective` score (below-floor → explore only,
+                            #   never hidden). Thin day → fewer cards, not junk padding.
+  fit_gate_floor: 0.25      # legacy (old judge-led gate); used only by the eval synthetic-GOLD path
+  hyre_blend: 0.1
+  fit_warn_threshold: 0.4   # below this, the card shows a ⚠ "big skill gap" note
+
+triage:
+  cutoffs: {must: 4.5, should: 3.5, could: 2.0}
+  drop_priorities: [drop]
+  min_labels_to_train: 30
+  audit_sample_per_tick: 1
+
+features:
+  model: "BAAI/bge-m3"
+  reranker: "BAAI/bge-reranker-v2-m3"
+  rerank_top_k: 30
+  coverage_tau: 0.6
+  esco_csv: null
+  # Headline fit = HyRE (ideal-résumé cosine) co-led with the bge-m3 SPARSE-lexical signal; both are
+  # stable anchors (sparse is deterministic). llm_cov is computed + shown as the card ✓/◐/✗ breakdown
+  # but dropped from the headline blend. Weights below were tuned on real labels; retune on yours.
+  fit_weights: {hyre: 0.7, sparse: 0.3}
+  sparse_norm: 0.45                # maps the bge-m3 sparse score (≈[0.03,0.45]) to ≈[0,1] (clamped)
+  hybrid_sparse: true              # compute the bge-m3 sparse-lexical hybrid signal in rerank_scored
+  llm_cov: true                    # qwen per-requirement coverage (cached) — card breakdown only now
+  hyre: true                       # HyRE = ideal-résumé cosine — co-leads the headline fit with sparse
+  eligibility: true                # extract HARD JD requirements (qwen, cached) → eligibility gate
+
+eligibility:                       # hard-qualification gate (education/PhD/credentials/language)
+  floor: 0.35    # multiplier for a clear hard miss (e.g. PhD-role w/o Master) → sinks to explore
+  mid: 0.6       # multiplier for a single-step gap (e.g. needs Master, has Bachelor; lang one below)
+  soft_lift_threshold: 0.55  # a SOFT (prose-degree) gap is lifted to 1.0 when fit_score ≥ this.
+                             #   Structural blockers (PhD position, hard non-EN language) are NEVER lifted.
+
+agent:                       # bounds per ReAct agent run (discover + investigate) — stop runaway
+  max_turns: 6
+  max_tool_calls: 6          # web_search/web_fetch calls; each fetch floods context with page text
+  max_wall_time_seconds: 120 # hard wall-clock cap per run
+  max_input_tokens: 60000    # hard input-token cap (observation accumulation)
+
+paths:
+  db: data/schabasch.sqlite3
+  golden_csv: data/golden/golden.csv
+  slate_dir: data/slates
+  model_dir: data/models
+  agent_workdir: data/agent

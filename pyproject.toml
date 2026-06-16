@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "schabasch"
+version = "0.1.0"
+description = "Schabaschkascuhen — личный пайплайн поиска работы мечты (Heidelberg/Frankfurt)"
+requires-python = ">=3.10"
+dependencies = [
+  "pandas",
+  "requests",
+  "pyyaml",
+  "openpyxl",
+  "rapidfuzz",
+  "fastapi",
+  "uvicorn",
+  "typer",
+  # python-jobspy ставится отдельно editable из форка: pip install -e "~/code/from GH/JobSpy"
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "httpx"]
+v2 = [
+  "FlagEmbedding>=1.3",      # bge-m3 (BGEM3FlagModel) + bge-reranker-v2-m3 (FlagReranker)
+  "lightgbm>=4.0",
+  "scikit-learn>=1.4",
+  "scipy>=1.13",
+  "joblib>=1.4",
+  "numpy>=1.26",
+  "beautifulsoup4",
+  "lxml",
+  "trafilatura",
+  # kl_agent_builder: pip install -e ~/code/work/KatherLab/prototype-internal-KL
+]
+
+[project.scripts]
+schabasch = "schabasch.cli:app"
+
+[tool.setuptools.packages.find]
+include = ["schabasch*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
