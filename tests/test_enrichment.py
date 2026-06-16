@@ -112,8 +112,8 @@ def test_enrichment_html_renders_block():
         "pros": ["космос-домен"], "cons": ["нужен мастер"],
         "company_review": "крупный аэрокосмический игрок", "clean_summary": "аналитик в космосе",
         "model_used": "sota"})
-    assert "Глубокий обзор" in html and "Плюсы" in html and "Минусы" in html
-    assert "Из описания" in html and "sota" in html and "аналитик в космосе" in html
+    assert "Deep dive" in html and "Pros" in html and "Cons" in html
+    assert "From the description" in html and "sota" in html and "аналитик в космосе" in html
 
 
 def test_enrichment_html_empty_when_no_data():

@@ -84,7 +84,7 @@ def test_tasks_page_renders(file_cfg):
     con.close()
     r = _client(file_cfg).get("/tasks")
     assert r.status_code == 200
-    assert "Инженерные" in r.text and "никаких инженеров" in r.text and "taskStatus" in r.text
+    assert "Engineering" in r.text and "никаких инженеров" in r.text and "taskStatus" in r.text
 
 
 def test_task_status_endpoint_flips(file_cfg):

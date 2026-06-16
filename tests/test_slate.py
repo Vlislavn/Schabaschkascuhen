@@ -79,7 +79,7 @@ def test_render_html_contains_buttons(cfg, con):
     s = slate.build_slate(cfg, con, "2026-06-13")
     html = slate.render_html(s, "2026-06-13")
     assert "applied" in html and "/feedback" in html
-    assert "💻🐀" in html and "💅💸" in html  # themed scale: офисная мышь → шабашка
+    assert "💻🐀" in html and "👸✨🧚" in html  # themed scale: office mouse → шабашка
 
 
 # ---------------------------------------------------------------------------
@@ -104,7 +104,7 @@ def test_slate_card_shows_posting_date(cfg, con):
     s = slate.build_slate(cfg, con, "2026-06-13")
     assert any(x["vacancy_id"] == vid and x.get("date_posted") == "2020-01-01" for x in s)
     html = slate.render_html(s, "2026-06-13")
-    assert "опубл." in html  # posting age surfaced on the card
+    assert "posted" in html  # posting age surfaced on the card
 
 
 def test_slate_card_shows_company_research(cfg, con):
@@ -117,7 +117,7 @@ def test_slate_card_shows_company_research(cfg, con):
     assert item.get("investigation", {}).get("company_size") == "large"
     html = slate.render_html(s, "2026-06-13")
     assert "🔎" in html and "€70" in html
-    assert "английская команда" in html and "Great role at Co." in html
+    assert "English-speaking team" in html and "Great role at Co." in html
 
 
 def test_slate_warns_closed_but_does_not_drop(cfg, con):
@@ -131,7 +131,7 @@ def test_slate_warns_closed_but_does_not_drop(cfg, con):
     ids = [x["vacancy_id"] for x in s]
     assert v_ok in ids and v_closed in ids          # closed is NOT dropped (recall > one-click check)
     html = slate.render_html(s, "2026-06-13")
-    assert "вакансия закрыта" in html               # truthfully flagged
+    assert "listing closed" in html                 # truthfully flagged
 
 
 def test_slate_unverified_listing_is_calm_not_alarm(cfg, con):
@@ -140,7 +140,7 @@ def test_slate_unverified_listing_is_calm_not_alarm(cfg, con):
     vid = seed_scored(con, "u/blocked", score=5, company="C")
     _seed_investigation(con, vid, {"still_open": None, "notes": "link blocked"}, verdict="ok")
     html = slate.render_html(slate.build_slate(cfg, con, "2026-06-13"), "2026-06-13")
-    assert "листинг не проверён" in html and "закрыта" not in html
+    assert "listing not checked" in html and "listing closed" not in html
 
 
 def test_slate_no_investigation_renders_clean(cfg, con):
@@ -168,7 +168,7 @@ def test_cross_account_repost_collapsed(cfg, con):
     kept = next(x for x in s if x["vacancy_id"] in (a, b))
     assert kept.get("also_at")              # the other employer attached
     html = slate.render_html(s, "2026-06-13")
-    assert "также:" in html
+    assert "also:" in html
 
 
 def test_generic_title_not_collapsed_across_companies(cfg, con):
@@ -194,7 +194,7 @@ def test_far_job_marked_not_dropped(cfg, con):
     far_item = next(x for x in s if x["vacancy_id"] == far)
     assert far_item["far"] is True and far_item["dist_km"] is not None
     html = slate.render_html(s, "2026-06-13")
-    assert "📍 далеко" in html
+    assert "📍 far" in html
 
 
 def test_far_preferred_for_explore(cfg, con):
@@ -215,7 +215,7 @@ def test_far_preferred_for_explore(cfg, con):
 def test_filter_chips_and_data_attrs_render(cfg, con):
     _seed_many(con, 12)
     html = slate.render_html(slate.build_slate(cfg, con, "2026-06-13"), "2026-06-13")
-    assert 'class="chips"' in html and "перспективные" in html and "📍 далеко" in html
+    assert 'class="chips"' in html and "promising" in html and "📍 far" in html
     assert 'id="cards"' in html and "data-days=" in html and "data-fit=" in html
     assert "applyFilter" in html   # the client-side filter is wired
 
@@ -263,6 +263,18 @@ def test_soft_eligibility_renders_amber_not_red(cfg, con):
                 " computed_at) VALUES (?,?,?,datetime('now'))", (vid, 0.5, json.dumps(feat)))
     con.commit()
     html = slate.render_html(slate.build_slate(cfg, con, "2026-06-13"), "2026-06-13")
-    assert "Требование на грани" in html and "alert warn" in html
+    assert "Borderline requirement" in html and "alert warn" in html
     # the red STOP is the alert block, not the ⛔ glyph (which the header legend lists deliberately)
     assert '<div class="alert">⛔' not in html   # soft → never the red STOP alert
+
+
+def test_bilingual_toggle_en_default_ru_on_request(cfg, con):
+    """English by default; ?lang=ru flips the UI to Russian; both keep «шабашка» + the toggle."""
+    _seed_many(con, 6)
+    s = slate.build_slate(cfg, con, "2026-06-13")
+    en = slate.render_html(s, "2026-06-13")                 # default = English
+    ru = slate.render_html(s, "2026-06-13", lang="ru")
+    assert '<html lang="en"' in en and "office mouse" in en and "annotate more ↗" in en
+    assert '<html lang="ru"' in ru and "офисная мышь" in ru and "разметить ещё ↗" in ru
+    assert "шабашка" in en and "шабашка" in ru             # signature term kept in both
+    assert "langsw" in en and 'href="?lang=ru"' in en      # toggle to Russian present on the EN page

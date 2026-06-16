@@ -52,17 +52,17 @@ def test_render_annotate_has_rating_buttons_no_applied(con, cfg):
     _seed_scored(con, "u/r", score=4, title="ML Engineer")
     items, total = slate.annotation_batch(cfg, con, "2026-06-15")
     html = slate.render_annotate_html(items, "2026-06-15", total_pending=total)
-    assert "Разметка" in html and "/feedback" in html
+    assert "Annotate" in html and "/feedback" in html
     assert "fb(" in html and "'bad'" in html and "'good'" in html and "'star'" in html
     # 'applied' нечем кликать на случайной вакансии из очереди → кнопки нет
     assert "'applied'" not in html
     # прогресс-счётчик (Goal-Gradient)
-    assert 'id="progress"' in html and "Отмечено 0/" in html
+    assert 'id="progress"' in html and "Marked 0/" in html
 
 
 def test_render_annotate_empty_queue(con, cfg):
     html = slate.render_annotate_html([], "2026-06-15", total_pending=0)
-    assert "Очередь разметки пуста" in html
+    assert "annotation queue is empty" in html
 
 
 # --------------------------------------------------------------------------- HTTP route
@@ -76,7 +76,7 @@ def test_annotate_route_renders(cfg, tmp_path):
     _seed_scored(con, "u/x", score=5, company="SpaceCo", title="Orbital Engineer")
     con.close()
     r = TestClient(feedback_app.create_app(fcfg)).get("/annotate")
-    assert r.status_code == 200 and "Разметка" in r.text and "Orbital Engineer" in r.text
+    assert r.status_code == 200 and "Annotate" in r.text and "Orbital Engineer" in r.text
 
 
 # --------------------------------------------------------------------------- few-shot нижний якорь

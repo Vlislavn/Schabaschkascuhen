@@ -8,9 +8,11 @@ from __future__ import annotations
 import threading
 from datetime import date, datetime, timezone
 
+from fastapi import Request   # module-level so `from __future__ annotations` strings resolve for FastAPI
 from pydantic import BaseModel
 
 from . import db, memory_guard, slate
+from .i18n import normalize_lang, t
 from .models import FEEDBACK_TO_SCORE
 
 
@@ -75,7 +77,7 @@ def _run_tick_background(cfg: dict, *, german: bool, tertiary: bool) -> None:
         # degradation. MemoryHeadroomError is surfaced via _FETCH_STATE["error"] (button shows it).
         memory_guard.configure_from_cfg(cfg)
         memory_guard.start_watchdog()
-        memory_guard.require_headroom("обновление вакансий (модели qwen + bge)")
+        memory_guard.require_headroom("fetch new jobs (qwen + bge models)")
         con = db.connect(cfg["paths"]["db"])
         summary = pipeline.nightly_tick(cfg, con, german_queries=german, tertiary=tertiary)
         _FETCH_STATE["summary"] = {k: summary.get(k) for k in
@@ -83,8 +85,8 @@ def _run_tick_background(cfg: dict, *, german: bool, tertiary: bool) -> None:
                                     "judge", "rerank", "slate")}
         _FETCH_STATE["error"] = None
     except memory_guard.MemoryHeadroomError:
-        # friendly RU message for the button (not the verbose English headroom text)
-        _FETCH_STATE["error"] = "мало памяти — закрой тяжёлые приложения и попробуй снова"
+        # store a CODE; /fetch-status localizes it to the page language (the thread has no lang)
+        _FETCH_STATE["error"] = "@memory"
     except Exception as e:  # noqa: BLE001 — surface, don't crash the worker thread
         _FETCH_STATE["error"] = f"{type(e).__name__}: {e}"
     finally:
@@ -101,8 +103,12 @@ def create_app(cfg: dict):
 
     app = FastAPI(title="Schabaschkascuhen Slate")
 
+    def _lang(request: Request) -> str:
+        return normalize_lang(request.query_params.get("lang"))
+
     @app.get("/", response_class=HTMLResponse)
-    def index() -> str:
+    def index(request: Request) -> str:
+        lang = _lang(request)
         con = _con(cfg)
         try:
             today = date.today().isoformat()
@@ -111,52 +117,56 @@ def create_app(cfg: dict):
             dr = con.execute("SELECT count FROM funnel_log WHERE stage='dedup_fuzzy' "
                              "ORDER BY id DESC LIMIT 1").fetchone()
             dedup_count = int(dr["count"]) if dr else 0
-            return slate.render_html(entries, today, alerts=alerts, dedup_count=dedup_count)
+            return slate.render_html(entries, today, alerts=alerts, dedup_count=dedup_count, lang=lang)
         finally:
             con.close()
 
     @app.get("/annotate", response_class=HTMLResponse)
-    def annotate() -> str:
+    def annotate(request: Request) -> str:
         # Single annotation surface (the xlsx bootstrap pack is retired): the judged-but-unrated
-        # queue, same card + same 👎/👍/⭐ buttons, writing to the same label table via /feedback.
+        # queue, same card + same 💻🐀/😎/👸✨🧚 buttons, writing to the label table via /feedback.
+        lang = _lang(request)
         con = _con(cfg)
         try:
             today = date.today().isoformat()
             items, total = slate.annotation_batch(cfg, con, today)
-            return slate.render_annotate_html(items, today, total_pending=total)
+            return slate.render_annotate_html(items, today, total_pending=total, lang=lang)
         finally:
             con.close()
 
     @app.get("/eval", response_class=HTMLResponse)
-    def eval_page() -> str:
+    def eval_page(request: Request) -> str:
         # Live match-quality vs Alina's REAL labels (the label table) — updates as she rates in
         # /annotate. No manual code re-point; the synthetic GOLD stays a CLI-only dev floor.
         from . import validation
+        lang = _lang(request)
         con = _con(cfg)
         try:
-            return slate.render_eval_html(validation.eval_report(cfg, con))
+            return slate.render_eval_html(validation.eval_report(cfg, con), lang=lang)
         finally:
             con.close()
 
     @app.get("/gaps", response_class=HTMLResponse)
-    def gaps_page() -> str:
-        # Recurring skill gaps across the jobs she WANTS (👍/💅💸/applied) — what to add to the CV
+    def gaps_page(request: Request) -> str:
+        # Recurring skill gaps across the jobs she WANTS (😎/👸✨🧚/applied) — what to add to the CV
         # or learn. Pure aggregation of stored llm_cov_reqs (no LLM call on the web path).
         from . import gaps
+        lang = _lang(request)
         con = _con(cfg)
         try:
-            return slate.render_gaps_html(gaps.gap_report(cfg, con))
+            return slate.render_gaps_html(gaps.gap_report(cfg, con), lang=lang)
         finally:
             con.close()
 
     @app.get("/tasks", response_class=HTMLResponse)
-    def tasks_page() -> str:
+    def tasks_page(request: Request) -> str:
         # Comment-tracker: every review comment as a theme-tagged task with an open|accounted|wontfix
         # status — the "which feedback did we act on" audit (W1). Pure read; toggles via /task-status.
         from . import tasks as _tasks
+        lang = _lang(request)
         con = _con(cfg)
         try:
-            return slate.render_tasks_html(_tasks.all_tasks(con), _tasks.summary(con))
+            return slate.render_tasks_html(_tasks.all_tasks(con), _tasks.summary(con), lang=lang)
         finally:
             con.close()
 
@@ -213,21 +223,22 @@ def create_app(cfg: dict):
             con.close()
 
     @app.post("/fetch")
-    def fetch(german: bool = False, tertiary: bool = False):
+    def fetch(request: Request, german: bool = False, tertiary: bool = False):
         """UI-triggered full pipeline (scrape→…→slate), async + SINGLE-FLIGHT. Returns immediately;
         poll /fetch-status. 409 if a fetch is already running (prevents double model-load)."""
+        lang = _lang(request)
         if not _FETCH_LOCK.acquire(blocking=False):
-            return JSONResponse({"ok": False, "error": "уже выполняется — подожди завершения"},
-                                status_code=409)
+            return JSONResponse({"ok": False, "error": t(lang, "fetch.busy409")}, status_code=409)
         _FETCH_STATE.update(running=True, started=datetime.now(timezone.utc).isoformat(),
                             finished=None, summary=None, error=None)
         threading.Thread(target=_run_tick_background, args=(cfg,),
                          kwargs={"german": german, "tertiary": tertiary}, daemon=True).start()
-        return {"ok": True, "message": "фетч запущен (займёт несколько минут — модели грузятся)"}
+        return {"ok": True, "message": t(lang, "fetch.started")}
 
     @app.get("/fetch-status")
-    def fetch_status():
-        """Poll the background fetch: running flag + the latest funnel stage as progress."""
+    def fetch_status(request: Request):
+        """Poll the background fetch: running flag + the latest funnel stage as progress (localized)."""
+        lang = _lang(request)
         con = _con(cfg)
         try:
             latest = con.execute(
@@ -236,20 +247,26 @@ def create_app(cfg: dict):
             con.close()
         code = latest["stage"] if latest else None
         if code == "memory_skip":
-            stage_human, heavy, idx = "пропускаю тяжёлый этап (мало памяти)", False, -1
+            stage_human, heavy, idx = t(lang, "fetch.memory_skip"), False, -1
         else:
             info = _STAGE_BY_CODE.get(code, {})
-            stage_human = info.get("human") or (code or None)
+            stage_human = t(lang, f"fetch.stage.{code}") if code in _STAGE_BY_CODE else (code or None)
             heavy = bool(info.get("heavy"))
             idx = _STAGE_INDEX.get(code, -1)
+        # localized error: a "@memory" sentinel from the worker → the friendly low-memory message
+        err = _FETCH_STATE["error"]
+        if err == "@memory":
+            err = t(lang, "fetch.err_memory")
+        stages = [{"code": s["code"], "heavy": s["heavy"], "human": t(lang, f"fetch.stage.{s['code']}")}
+                  for s in _FETCH_STAGES]
         return {"running": _FETCH_STATE["running"], "started": _FETCH_STATE["started"],
                 "finished": _FETCH_STATE["finished"], "summary": _FETCH_STATE["summary"],
-                "error": _FETCH_STATE["error"],
+                "error": err,
                 "stage": code,
                 "stage_count": (latest["count"] if latest else None),
                 "stage_human": stage_human, "heavy": heavy, "stage_index": idx,
                 "n_stages": len(_FETCH_STAGES),
-                "stages": _FETCH_STAGES}
+                "stages": stages}
 
     @app.get("/funnel")
     def funnel():

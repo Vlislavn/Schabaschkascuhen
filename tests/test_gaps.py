@@ -60,18 +60,18 @@ def test_render_gaps_html(con, cfg):
     rep = {"n_wanted": 4, "n_jobs_with_reqs": 4, "reliable": True,
            "rows": [{"requirement": "Kubernetes", "missing": 3, "partial": 1, "present": 0, "jobs": 4}]}
     html = slate.render_gaps_html(rep)
-    assert "Пробелы в навыках" in html and "Kubernetes" in html and "3 ✗" in html
+    assert "Skill gaps" in html and "Kubernetes" in html and "3 ✗" in html
     empty = slate.render_gaps_html({"n_wanted": 0, "rows": []})
-    assert "Отмечай" in empty and "/annotate" in empty
+    assert "Mark" in empty and "/annotate" in empty
 
 
 # --------------------------------------------------------------------------- dates fallback
 
 def test_posted_ago_first_seen_fallback():
     iso = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
-    assert slate._posted_ago(iso, None).startswith("опубл.")
-    # no posting date → fall back to first_seen, labelled "найдено"
-    assert slate._posted_ago(None, iso).startswith("найдено")
+    assert slate._posted_ago(iso, None).startswith("posted")
+    # no posting date → fall back to first_seen, labelled "found"
+    assert slate._posted_ago(None, iso).startswith("found")
     assert "3" in slate._posted_ago(None, iso)
     assert slate._posted_ago(None, None) == ""   # nothing → empty (no crash)
 
@@ -80,9 +80,9 @@ def test_posted_ago_first_seen_fallback():
 
 def test_score_badge_themed_with_gradient():
     b1 = slate._score_badge(1)
-    assert "💻🐀" in b1 and "linear-gradient" in b1 and "офисная мышь" in b1
+    assert "💻🐀" in b1 and "linear-gradient" in b1 and "office mouse" in b1
     b5 = slate._score_badge(5)
-    assert "💅💸" in b5 and "linear-gradient" in b5 and "шабашка" in b5
+    assert "👸✨🧚" in b5 and "linear-gradient" in b5 and "шабашка" in b5
     assert slate._score_badge(None) == ""
 
 

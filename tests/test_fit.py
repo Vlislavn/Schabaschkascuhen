@@ -283,7 +283,7 @@ def test_skill_breakdown_renders_and_supersedes_fit_note():
         {"requirement": "BPMN", "verdict": "present"},
         {"requirement": "Kubernetes", "verdict": "missing"},
         {"requirement": "ML", "verdict": "partial"}]})
-    assert "🎯 Навыки 75%" in h and "2 ✓" in h and "1 ◐" in h and "1 ✗" in h
+    assert "🎯 Skills 75%" in h and "2 ✓" in h and "1 ◐" in h and "1 ✗" in h
     assert "<details" in h and "✗ Kubernetes" in h and "✓ Business analysis" in h
     # no per-requirement data → empty (graceful: llm_cov off / pre-rerank)
     assert slate._skills_html({"llm_cov": None, "llm_cov_reqs": []}) == ""
@@ -292,7 +292,7 @@ def test_skill_breakdown_renders_and_supersedes_fit_note():
     card = slate._card_block({"vacancy_id": 1, "title": "X", "llm_cov": 0.3,
                               "llm_cov_reqs": [{"requirement": "BPMN", "verdict": "missing"}],
                               "fit_score": 0.2, "fit_note": "крупный разрыв"})
-    assert "🎯 Навыки" in card and "крупный разрыв" not in card
+    assert "🎯 Skills" in card and "крупный разрыв" not in card
     # no reqs → falls back to the fit ⚠ gap note
     card2 = slate._card_block({"vacancy_id": 2, "title": "Y", "fit_score": 0.2, "fit_note": "крупный разрыв"})
     assert "крупный разрыв" in card2

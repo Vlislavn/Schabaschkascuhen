@@ -38,12 +38,12 @@ def test_fetch_status_memory_skip_stage(file_cfg):
     con = db.connect(file_cfg["paths"]["db"])
     db.log_funnel(con, "memory_skip", 0, source="judge", detail="low")
     con.close()
-    s = _client(file_cfg).get("/fetch-status").json()
-    assert "памяти" in s["stage_human"] and s["heavy"] is False
+    s = _client(file_cfg).get("/fetch-status").json()   # default render = English
+    assert "memory" in s["stage_human"] and s["heavy"] is False
 
 
 def test_fetch_blocked_when_low_memory_releases_lock(file_cfg, monkeypatch):
-    """require_headroom raising at worker entry → friendly RU error, lock released, no permanent 409."""
+    """require_headroom raising at worker entry → friendly error, lock released, no permanent 409."""
     import schabasch.feedback_app as fa
 
     def _no_headroom(ctx):
@@ -58,7 +58,7 @@ def test_fetch_blocked_when_low_memory_releases_lock(file_cfg, monkeypatch):
         if not s["running"]:
             break
         time.sleep(0.05)
-    assert s["running"] is False and s["error"] and "памяти" in s["error"]
+    assert s["running"] is False and s["error"] and "memory" in s["error"]
     assert fa._FETCH_LOCK.acquire(blocking=False)   # lock released → not wedged
     fa._FETCH_LOCK.release()
 

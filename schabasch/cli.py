@@ -1,4 +1,4 @@
-"""CLI (typer): точка входа `python -m schabasch.cli ...` и console_script `schabasch`."""
+"""CLI (typer): entry point `python -m schabasch.cli ...` and the `schabasch` console_script."""
 from __future__ import annotations
 
 import json
@@ -9,7 +9,7 @@ import typer
 from . import candidate, config, db, dedup, features as _features, geo, hardfilters, judge, normalize, pipeline, slate, triage as _triage
 from .sources import arbeitsagentur, jobspy_source
 
-app = typer.Typer(add_completion=False, help="Schabaschkascuhen — личный пайплайн поиска работы")
+app = typer.Typer(add_completion=False, help="Schabaschkascuhen — a personal dream-job search pipeline")
 
 
 def _ctx():
@@ -47,7 +47,7 @@ def candidate_cmd(
 
 @app.command("import-spike")
 def import_spike():
-    """Разовый импорт спайк-пула (indeed/linkedin/arbeitsagentur)."""
+    """One-off import of the spike pool (indeed/linkedin/arbeitsagentur)."""
     cfg, con = _ctx()
     _echo(pipeline.import_spike_data(cfg, con))
 
@@ -56,14 +56,14 @@ def import_spike():
 def tick(german: bool = typer.Option(False, "--german"),
          budget: int = typer.Option(None, "--budget"),
          tertiary: bool = typer.Option(False, "--tertiary")):
-    """Полный ночной прогон (canary→scrape→details→geo→hard→normalize→judge→slate)."""
+    """Full nightly run (canary→scrape→details→geo→hard→normalize→judge→slate)."""
     cfg, con = _ctx()
     pipeline.nightly_tick(cfg, con, german_queries=german, budget=budget, tertiary=tertiary)
 
 
 @app.command()
 def scrape(german: bool = typer.Option(False, "--german")):
-    """Скрейп Indeed/LinkedIn + поиск Arbeitsagentur."""
+    """Scrape Indeed/LinkedIn + Arbeitsagentur search."""
     cfg, con = _ctx()
     q = cfg["search"].get("queries_de" if german else "queries_en")
     _echo({"jobspy": jobspy_source.scrape(cfg, con, queries=q),
@@ -72,14 +72,14 @@ def scrape(german: bool = typer.Option(False, "--german")):
 
 @app.command()
 def details():
-    """Добыть полные описания Arbeitsagentur (v3 jobdetails)."""
+    """Fetch full Arbeitsagentur descriptions (v3 jobdetails)."""
     cfg, con = _ctx()
     _echo({"described": arbeitsagentur.fetch_details(cfg, con)})
 
 
 @app.command()
 def tertiary():
-    """Третичные фетчеры (Should): Arbeitnow API + GermanTechJobs RSS, регион-фильтр."""
+    """Tertiary fetchers (Should): Arbeitnow API + GermanTechJobs RSS, region filter."""
     cfg, con = _ctx()
     from .sources import tertiary as t
     _echo({"arbeitnow": t.fetch_arbeitnow(cfg, con),
@@ -88,42 +88,42 @@ def tertiary():
 
 @app.command()
 def prefilter():
-    """Геокодированный грубый гео-фильтр."""
+    """Geocoded coarse geo-filter."""
     cfg, con = _ctx()
     _echo(geo.prefilter(cfg, con))
 
 
 @app.command("hard")
 def hard():
-    """Жёсткие фильтры (скрытый немецкий, Zeitarbeit) до LLM."""
+    """Hard filters (hidden German, Zeitarbeit) before the LLM."""
     cfg, con = _ctx()
     _echo(hardfilters.apply_hard_filters(cfg, con))
 
 
 @app.command("dedup")
 def dedup_cmd(threshold: int = typer.Option(88, "--threshold")):
-    """Fuzzy кросс-борд дедупликация (RapidFuzz, logged-not-merged)."""
+    """Fuzzy cross-board deduplication (RapidFuzz, logged-not-merged)."""
     cfg, con = _ctx()
     _echo(dedup.dedup_fuzzy(cfg, con, threshold=threshold))
 
 
 @app.command("normalize")
 def normalize_(budget: int = typer.Option(None, "--budget")):
-    """Нормализация DESCRIBED → карточки (qwen3:8b)."""
+    """Normalize DESCRIBED → cards (qwen3:8b)."""
     cfg, con = _ctx()
     _echo(normalize.normalize_pending(cfg, con, budget=budget))
 
 
 @app.command("judge")
 def judge_():
-    """Оценка карточек судьёй."""
+    """Judge scoring of the cards."""
     cfg, con = _ctx()
     _echo(judge.judge_pending(cfg, con))
 
 
 @app.command("slate")
 def slate_cmd(date: str = typer.Option(None, "--date")):
-    """Собрать slate (8 exploit + 2 explore) и напечатать карточки."""
+    """Build the slate (8 exploit + 2 explore) and print the cards."""
     from datetime import date as _date
     cfg, con = _ctx()
     d = date or _date.today().isoformat()
@@ -135,7 +135,7 @@ def slate_cmd(date: str = typer.Option(None, "--date")):
 
 @app.command()
 def render(date: str = typer.Option(None, "--date"), out: str = typer.Option(None, "--out")):
-    """Отрендерить HTML сегодняшнего slate в файл (по умолчанию data/slates/<date>.html)."""
+    """Render today's slate to an HTML file (default data/slates/<date>.html)."""
     from datetime import date as _date
     cfg, con = _ctx()
     d = date or _date.today().isoformat()
@@ -149,14 +149,14 @@ def render(date: str = typer.Option(None, "--date"), out: str = typer.Option(Non
 
 @app.command()
 def canary():
-    """Канарейки источников (min-row assertion)."""
+    """Source canaries (min-row assertion)."""
     cfg, con = _ctx()
     _echo(jobspy_source.canary(cfg, con))
 
 
 @app.command()
 def serve():
-    """Поднять локальную страницу фидбека (uvicorn)."""
+    """Start the local feedback page (uvicorn)."""
     cfg, _ = _ctx()
     from . import feedback_app
     feedback_app.serve(cfg)
@@ -171,7 +171,7 @@ def rerank_cmd(top_k: int = typer.Option(None, "--top-k", help="Max SCORED vacan
 
 @app.command("export-golden")
 def export_golden(out: str = typer.Option(None, "--out")):
-    """Экспорт golden dataset в CSV."""
+    """Export the golden dataset to CSV."""
     cfg, con = _ctx()
     out_path = Path(out) if out else Path(cfg["paths"]["golden_csv"])
     n = db.export_golden_csv(con, out_path)
@@ -180,7 +180,7 @@ def export_golden(out: str = typer.Option(None, "--out")):
 
 @app.command()
 def funnel():
-    """Показать последний лог воронки + канарейки + статусы."""
+    """Show the latest funnel log + canaries + statuses."""
     cfg, con = _ctx()
     rows = con.execute(
         "SELECT run_at, stage, source, count, detail FROM funnel_log ORDER BY id DESC LIMIT 25"
@@ -195,7 +195,7 @@ def funnel():
 
 @app.command()
 def cv(folds: int = typer.Option(5, "--folds"), runs: int = typer.Option(3, "--runs")):
-    """5-fold CV agreement судья↔метки (gate ≥75% и > majority+10pp). См. calibration.py."""
+    """5-fold CV agreement judge↔labels (gate ≥75% and > majority+10pp). See calibration.py."""
     from . import calibration
     cfg, con = _ctx()
     _echo(calibration.cross_validate(cfg, con, folds=folds, runs=runs))
@@ -203,7 +203,7 @@ def cv(folds: int = typer.Option(5, "--folds"), runs: int = typer.Option(3, "--r
 
 @app.command()
 def gaps():
-    """Какие навыки регулярно отсутствуют под ЖЕЛАННЫЕ вакансии (👍/💅💸/applied) — отчёт пробелов."""
+    """Which skills are regularly missing for the jobs you WANT (😎/👸✨🧚/applied) — the gaps report."""
     from . import gaps as _gaps
     cfg, con = _ctx()
     rep = _gaps.gap_report(cfg, con)

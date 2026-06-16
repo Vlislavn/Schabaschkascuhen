@@ -87,8 +87,8 @@ def test_eval_route_renders_with_labels(cfg, tmp_path):
     con.close()
     r = TestClient(feedback_app.create_app(fcfg)).get("/eval")
     assert r.status_code == 200
-    assert "Валидация" in r.text and 'href="/annotate"' in r.text
-    assert "обучается на метках" in r.text   # leaky signals flagged
+    assert "Match validation" in r.text and "/annotate" in r.text
+    assert "trains on labels" in r.text   # leaky signals flagged
 
 
 def test_eval_route_zero_labels(cfg, tmp_path):
@@ -98,7 +98,7 @@ def test_eval_route_zero_labels(cfg, tmp_path):
     fcfg = {**cfg, "paths": {**cfg["paths"], "db": str(tmp_path / "t.sqlite3")}}
     db.connect(fcfg["paths"]["db"]).close()  # schema only, no labels
     r = TestClient(feedback_app.create_app(fcfg)).get("/eval")
-    assert r.status_code == 200 and "Пока нет твоих оценок" in r.text
+    assert r.status_code == 200 and "No ratings yet" in r.text
 
 
 # --------------------------------------------------------------------------- metrics parity

@@ -70,14 +70,14 @@ def test_responsive_and_a11y_css_tokens_present():
 
 
 def test_emoji_buttons_have_aria_labels():
-    h = S._card_block(_CARD)
-    assert 'aria-label="Не для меня — офисная мышь"' in h
-    assert 'aria-label="Интересно"' in h and 'aria-label="Шабашка — мечта"' in h
-    assert 'aria-label="Откликнулась"' in h
+    h = S._card_block(_CARD)                              # default render = English
+    assert 'aria-label="Not for me — office mouse"' in h
+    assert 'aria-label="Interesting"' in h and 'aria-label="шабашка — the dream"' in h
+    assert 'aria-label="Applied"' in h
 
 
 def test_score_badge_has_accessible_name():
-    assert 'role="img" aria-label="оценка 4 из 5"' in S._score_badge(4)
+    assert 'role="img" aria-label="score 4 of 5"' in S._score_badge(4)
 
 
 def test_chips_are_keyboard_focusable_buttons():
@@ -87,12 +87,12 @@ def test_chips_are_keyboard_focusable_buttons():
 
 
 def test_legend_present_on_card_pages():
-    assert "обозначения" in _slate() and "обозначения" in _annotate()
-    assert "💻🐀 офисная мышь" in _slate()
+    assert "legend" in _slate() and "legend" in _annotate()
+    assert "💻🐀 office mouse" in _slate()
 
 
 def test_explore_slot_has_clear_label():
-    assert "проверка интереса" in S._card_block(_EXPLORE)
+    assert "interest check" in S._card_block(_EXPLORE)
 
 
 def test_meta_row_split_for_mobile_stacking():

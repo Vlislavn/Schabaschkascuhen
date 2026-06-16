@@ -14,6 +14,7 @@ from . import db, eligibility as _elig, features as _features, geo as _geo, role
     triage as _triage
 from .candidate import load_candidate
 from .geo import _normalize_city
+from .i18n import DEFAULT_LANG, available_langs, t
 from .models import Status, normalize_company, normalize_title
 
 
@@ -356,6 +357,8 @@ _CSS = """
 body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:780px;margin:0 auto;
 padding:20px;background:#f5f6f8;color:#1a1a1a}
 h1{font-size:20px}.muted{color:#595959;font-size:13px}
+.topbar{text-align:right;font-size:12px;margin-bottom:4px}
+.langsw a{color:#1F4E79;margin-left:6px}.langsw b{margin-left:6px;color:#1a1a1a}
 .nav{font-size:13px;margin:2px 0 12px}.nav a{margin-right:10px}
 .progress{font-size:13px;color:#1F4E79;font-weight:600;margin:4px 0 14px}
 .card{background:#fff;border:1px solid #e2e4e8;border-radius:10px;padding:16px 18px;margin:14px 0;
@@ -445,7 +448,7 @@ details.legend .leg span{white-space:nowrap}
 }
 """
 
-_JS = """
+_JS_BODY = """
 async function fb(id, action, el){
   const card = document.getElementById('card-'+id);
   // WS2: include the free-text note so a correction ('Master Data ≠ degree', 'люблю lead') becomes
@@ -472,8 +475,8 @@ function bump(){
   const p = document.getElementById('progress'); if(!p) return;
   const total = +p.dataset.total;
   const done = document.querySelectorAll('.card.done').length;
-  p.textContent = (done>=total && total>0) ? ('✅ Готово · '+done+'/'+total)
-                                            : ('Отмечено '+done+'/'+total);
+  p.textContent = (done>=total && total>0) ? (T.done+' '+done+'/'+total)
+                                            : (T.marked+' '+done+'/'+total);
 }
 // WS3 client-side filter chips: time window (data-days) + order (перспективные=fit DOM order /
 // свежие=by days) + far toggle. No new page/endpoint (Hick/Tesler — subtract). Cards carry data-*.
@@ -516,21 +519,21 @@ function applyFilter(){
 function triggerFetch(){
   var btn = document.getElementById('fetch-btn'), st = document.getElementById('fetch-status');
   if(btn) btn.disabled = true;
-  if(st) st.textContent = ' запускаю…';
-  fetch('/fetch', {method:'POST'}).then(function(r){ return r.json().then(function(d){return {ok:r.ok, d:d};}); })
+  if(st) st.textContent = T.fetch_starting;
+  fetch('/fetch?lang='+LANG, {method:'POST'}).then(function(r){ return r.json().then(function(d){return {ok:r.ok, d:d};}); })
    .then(function(x){
-     if(!x.ok){ if(st) st.textContent = ' ⚠ ' + (x.d.error || 'занято'); if(btn) btn.disabled = false; return; }
-     if(st) st.textContent = ' ⏳ идёт… (можно закрыть; обновится к утру)';
+     if(!x.ok){ if(st) st.textContent = ' ⚠ ' + (x.d.error || T.fetch_busy); if(btn) btn.disabled = false; return; }
+     if(st) st.textContent = T.fetch_running;
      var poll = setInterval(function(){
-       fetch('/fetch-status').then(function(r){return r.json();}).then(function(s){
+       fetch('/fetch-status?lang='+LANG).then(function(r){return r.json();}).then(function(s){
          if(s.running){
-           var label = s.stage_human || s.stage || 'работаю';
+           var label = s.stage_human || s.stage || T.fetch_working;
            var pos = (s.stage_index >= 0) ? (' (' + (s.stage_index+1) + '/' + s.n_stages + ')') : '';
            var heavy = s.heavy ? ' 🧠' : '';   // model-loading stage (qwen/bge)
            if(st) st.textContent = ' ⏳ ' + label + pos + heavy + '…';
          }
          else { clearInterval(poll); if(btn) btn.disabled = false;
-                if(st) st.textContent = s.error ? (' ⚠ ' + s.error) : ' ✓ готово — обнови страницу'; }
+                if(st) st.textContent = s.error ? (' ⚠ ' + s.error) : T.fetch_done; }
        }).catch(function(){ clearInterval(poll); if(btn) btn.disabled = false; });
      }, 5000);
    }).catch(function(e){ if(st) st.textContent = ' ⚠ ' + e; if(btn) btn.disabled = false; });
@@ -544,8 +547,8 @@ function taskStatus(id, status){
      var row = document.getElementById('task-'+id); if(!row) return;
      row.dataset.status = status;
      var b = row.querySelector('.tstate');
-     if(b) b.textContent = status==='accounted' ? '✅ учтено'
-                         : status==='wontfix' ? '🚫 не нужно' : '⏳ открыто';
+     if(b) b.textContent = status==='accounted' ? T.task_accounted
+                         : status==='wontfix' ? T.task_wontfix : T.task_open;
    });
 }
 // Note toggle (Selective Attention): reveal the hidden note field after the buttons + focus it.
@@ -556,6 +559,17 @@ function toggleNote(id){
 }
 _initFilter();
 """
+
+
+def _js(lang: str) -> str:
+    """Client script with a localized strings object `T` + `LANG` injected at the top (the static
+    body references T.key / LANG, so client-side text follows the page language)."""
+    keys = ["js.marked", "js.done", "js.fetch_starting", "js.fetch_busy", "js.fetch_running",
+            "js.fetch_working", "js.fetch_done", "js.task_accounted", "js.task_wontfix", "js.task_open"]
+    tbl = {k.split(".", 1)[1]: t(lang, k) for k in keys}
+    head = (f"const LANG={json.dumps(lang)};\n"
+            f"const T={json.dumps(tbl, ensure_ascii=False)};\n")
+    return head + _JS_BODY
 
 
 def degraded_sources(con) -> list[str]:
@@ -576,14 +590,15 @@ def degraded_sources(con) -> list[str]:
     return bad
 
 
-def _posted_ago(date_posted: str | None, first_seen: str | None = None) -> str:
-    """Human 'N дн. назад' from the ISO posting date. Falls back to `first_seen` (when we first
-    scraped it) labelled 'найдено' so a date ALWAYS shows — most board rows lack a real posting
+def _posted_ago(date_posted: str | None, first_seen: str | None = None,
+                lang: str = DEFAULT_LANG) -> str:
+    """Human 'N days ago' from the ISO posting date. Falls back to `first_seen` (when we first
+    scraped it) labelled 'found' so a date ALWAYS shows — most board rows lack a real posting
     date (LinkedIn never returns one). '' only if neither parses."""
     from datetime import datetime, timezone
-    verb, raw = "опубл.", date_posted
+    verb, raw = t(lang, "posted.published"), date_posted
     if not raw:
-        verb, raw = "найдено", first_seen   # no posting date → show when we found it
+        verb, raw = t(lang, "posted.found"), first_seen   # no posting date → show when we found it
     if not raw:
         return ""
     try:
@@ -594,10 +609,10 @@ def _posted_ago(date_posted: str | None, first_seen: str | None = None) -> str:
         dt = dt.replace(tzinfo=timezone.utc)
     days = (datetime.now(timezone.utc) - dt).days
     if days <= 0:
-        return f"{verb} сегодня"
+        return t(lang, "posted.today", verb=verb)
     if days == 1:
-        return f"{verb} вчера"
-    return f"{verb} {days} дн. назад"
+        return t(lang, "posted.yesterday", verb=verb)
+    return t(lang, "posted.days_ago", verb=verb, days=days)
 
 
 def _days_ago(date_posted: str | None, first_seen: str | None = None) -> int:
@@ -628,7 +643,7 @@ def _to_int(v: object) -> int | None:
         return None
 
 
-def _verified_html(inv: dict | None) -> str:
+def _verified_html(inv: dict | None, lang: str = DEFAULT_LANG) -> str:
     """Compact 'deeper review' line from the investigator enrichment (company size/salary/English
     team/still-open/notes). Returns '' when there's no investigation for this card."""
     if not isinstance(inv, dict):
@@ -636,33 +651,33 @@ def _verified_html(inv: dict | None) -> str:
     parts: list[str] = []
     size = inv.get("company_size")
     if size and str(size).lower() != "unknown":
-        parts.append(f"компания: {escape(str(size))}")
+        parts.append(t(lang, "verified.company", size=escape(str(size))))
     elif inv.get("company_known"):
-        parts.append("известный работодатель")
+        parts.append(t(lang, "verified.known_employer"))
     kmin, kmax = _to_int(inv.get("salary_eur_min")), _to_int(inv.get("salary_eur_max"))
     if kmin and kmax:
         parts.append(f"€{kmin // 1000}–{kmax // 1000}k")
     elif kmin or kmax:
         parts.append(f"€{(kmin or kmax) // 1000}k")
     if inv.get("english_team_signal"):
-        parts.append("английская команда")
+        parts.append(t(lang, "verified.english_team"))
     if inv.get("german_rooted"):
-        parts.append("🇩🇪 укоренена в Германии")   # integration signal (validated company)
+        parts.append(t(lang, "verified.german_rooted"))   # integration signal (validated company)
     src = inv.get("validation_source")
     if src and str(src).startswith("wikipedia"):
-        parts.append("✓ Wikipedia")               # independently verified on a known site
+        parts.append(t(lang, "verified.wikipedia"))       # independently verified on a known site
     # still_open is now a DETERMINISTIC check (investigate._check_still_open): True=verified open,
     # False=verified gone (404/410/AA-API), None+key-present=checked-but-unverified (blocked/timeout).
     # Never a false "closed": an unverified link reads as calm info, not an alarm.
     so = inv.get("still_open")
     if so is True:
-        parts.append("открыта ✓")
+        parts.append(t(lang, "verified.open"))
     elif so is False:
-        parts.append("⚠ вакансия закрыта")
+        parts.append(t(lang, "verified.closed"))
     elif "still_open" in inv:
-        parts.append("ℹ листинг не проверён")
+        parts.append(t(lang, "verified.unchecked"))
     verdict = inv.get("verdict") or ""
-    badge = '<span class="suspect">⚠ подозрительно</span> ' if verdict == "suspect" else ""
+    badge = f'<span class="suspect">{t(lang, "verified.suspect")}</span> ' if verdict == "suspect" else ""
     notes = escape(str(inv.get("notes") or "").strip())
     desc = escape(str(inv.get("company_description") or "").strip())
     if not parts and not notes and not badge and not desc:
@@ -672,7 +687,7 @@ def _verified_html(inv: dict | None) -> str:
     return f'<div class="verified">🔎 {badge}{" · ".join(parts)}{desc_html}{note_html}</div>'
 
 
-def _enrichment_html(enr: dict | None) -> str:
+def _enrichment_html(enr: dict | None, lang: str = DEFAULT_LANG) -> str:
     """Zotero-style enrichment block (collapsible): a clean re-parse of muddy ads, pros/cons two-
     column, key extracted JD snippets, + the model that produced it (provenance). '' when absent —
     so a card with no enrich run just omits it (graceful degrade)."""
@@ -695,21 +710,21 @@ def _enrichment_html(enr: dict | None) -> str:
         cl = "".join(f"<li>{c}</li>" for c in cons)
         parts.append(
             '<div class="ej-pc">'
-            f'<div class="ej-pros"><b>✅ Плюсы</b><ul>{pl or "<li>—</li>"}</ul></div>'
-            f'<div class="ej-cons"><b>⚠ Минусы</b><ul>{cl or "<li>—</li>"}</ul></div></div>')
+            f'<div class="ej-pros"><b>{t(lang, "enrich.pros")}</b><ul>{pl or "<li>—</li>"}</ul></div>'
+            f'<div class="ej-cons"><b>{t(lang, "enrich.cons")}</b><ul>{cl or "<li>—</li>"}</ul></div></div>')
     if snippets:
         lis = "".join(
             f'<li><span class="ej-goal">{escape(str(s.get("goal") or ""))}:</span> '
             f'{escape(str(s.get("snippet") or ""))}</li>' for s in snippets[:2])
-        parts.append(f'<div class="ej-snip"><b>📌 Из описания</b><ul>{lis}</ul></div>')
+        parts.append(f'<div class="ej-snip"><b>{t(lang, "enrich.from_desc")}</b><ul>{lis}</ul></div>')
     model = escape(str(enr.get("model_used") or ""))
-    prov = f'<div class="ej-prov">✨ обзор: {model}</div>' if model else ""
-    return (f'<details class="enrich"><summary>📄 Глубокий обзор вакансии</summary>'
+    prov = f'<div class="ej-prov">{t(lang, "enrich.review_by", model=model)}</div>' if model else ""
+    return (f'<details class="enrich"><summary>{t(lang, "enrich.deep_dive")}</summary>'
             f'{"".join(parts)}{prov}</details>')
 
 
-def _skills_html(e: dict) -> str:
-    """Collapsible per-skill match: '🎯 Навыки {cov}% · n✓·n◐·n✗' summary + the ✓/◐/✗ requirement
+def _skills_html(e: dict, lang: str = DEFAULT_LANG) -> str:
+    """Collapsible per-skill match: '🎯 Skills {cov}% · n✓·n◐·n✗' summary + the ✓/◐/✗ requirement
     list (matched first). Headline % = llm_cov (the honest skill-coverage), NOT the xenc-compressed
     fit_score. '' when there's no per-requirement data (llm_cov off / pre-rerank)."""
     reqs = e.get("llm_cov_reqs") or []
@@ -723,15 +738,16 @@ def _skills_html(e: dict) -> str:
         f'<li class="sk-{r.get("verdict")}">{sym.get(r.get("verdict"), "·")} '
         f'{escape(str(r.get("requirement") or ""))}</li>'
         for r in sorted(reqs, key=lambda r: order.get(r.get("verdict"), 3)))
-    return (f'<details class="skills"><summary>🎯 Навыки {float(cov):.0%} · '
-            f'{n["present"]} ✓ · {n["partial"]} ◐ · {n["missing"]} ✗</summary>'
+    summary = t(lang, "skills.summary", cov=f"{float(cov):.0%}",
+                present=n["present"], partial=n["partial"], missing=n["missing"])
+    return (f'<details class="skills"><summary>{summary}</summary>'
             f'<ul>{lis}</ul></details>')
 
 
 # Persona scale, 1 «офисная мышь» (drab) → 5 «шабашка» (vibrant). Themed emoji + a gradient that
 # ENCODES magnitude — Von Restorff (the score stays the one bright element) + Aesthetic-Usability.
 # One dict, trivially tweakable.
-_SCORE_EMOJI = {1: "💻🐀", 2: "🐭", 3: "😐", 4: "😎", 5: "💅💸"}
+_SCORE_EMOJI = {1: "💻🐀", 2: "🐭", 3: "😐", 4: "😎", 5: "👸✨🧚"}
 _SCORE_GRADIENT = {
     1: "linear-gradient(135deg,#9aa0a6,#c4c8cc)",   # офисная мышь — drab grey
     2: "linear-gradient(135deg,#8b93a3,#b9c1cf)",
@@ -741,53 +757,57 @@ _SCORE_GRADIENT = {
 }
 
 
-def _score_badge(score) -> str:
-    """Themed score chip: 💻🐀 (1, офисная мышь) → 💅💸 (5, шабашка) over a grey→gold/pink gradient
+def _score_badge(score, lang: str = DEFAULT_LANG) -> str:
+    """Themed score chip: 💻🐀 (1, office mouse) → 👸✨🧚 (5, шабашка) over a grey→gold/pink gradient
     encoding magnitude. '' when unscored."""
     if score is None:
         return ""
     s = max(1, min(5, int(score)))
-    # role=img + aria-label so a screen reader announces "оценка N из 5" instead of the raw emoji
+    label = (t(lang, "label.office_mouse") if s == 1
+             else t(lang, "label.shabashka") if s == 5 else f"{s}/5")
+    # role=img + aria-label so a screen reader announces "score N of 5" instead of the raw emoji
     # (WCAG 4.1.2 accessible name; the emoji+gradient is decorative once the score is announced).
-    return (f'<div class="score" role="img" aria-label="оценка {s} из 5" title="оценка {s}/5: '
-            f'{"офисная мышь" if s == 1 else "шабашка" if s == 5 else str(s) + "/5"}" '
+    return (f'<div class="score" role="img" aria-label="{escape(t(lang, "score.aria", s=s))}" '
+            f'title="{escape(t(lang, "score.title", s=s, label=label))}" '
             f'style="background:{_SCORE_GRADIENT[s]}">{_SCORE_EMOJI[s]}</div>')
 
 
-def _card_block(e: dict, *, show_applied: bool = True) -> str:
-    """Один HTML-блок карточки — общий для дневного slate и страницы разметки (одна модель,
-    одна разметка, без форка второго шаблона). Сильный акцент только на двух вещах (Von
-    Restorff): оценка-чип (💻🐀→💅💸, градиент) и красный ⛔ STOP; разрыв по навыкам ⚠ приглушён.
-    data-* атрибуты (days/score/fit/far) — для клиентских чипов-фильтров (WS3, без нового эндпоинта)."""
+def _card_block(e: dict, *, show_applied: bool = True, lang: str = DEFAULT_LANG) -> str:
+    """One HTML card block — shared by the daily slate and the annotation page (one data model, one
+    template, no fork). Strong emphasis on exactly two things (Von Restorff): the score chip
+    (💻🐀→👸✨🧚, gradient) and the red ⛔ STOP; the skill-gap ⚠ is muted.
+    data-* attrs (days/score/fit/far) drive the client-side filter chips (WS3, no new endpoint)."""
     done = e.get("feedback")   # actioned today → render as done (persisted state)
     cls = "card explore" if e.get("slot_type") == "explore" else "card"
     if done:
         cls += " done"
     vid = e["vacancy_id"]
-    tag_explore = ('<span class="tag-explore">🧭 проверка интереса</span>'
+    tag_explore = (f'<span class="tag-explore">{t(lang, "card.explore_tag")}</span>'
                    if e.get("slot_type") == "explore" else "")
     why = escape(str(e.get("why") or ""))
     score = e.get("score")
-    score_html = _score_badge(score)
+    score_html = _score_badge(score, lang)
     fbstate = f' ✓ {escape(str(done))}' if done else ""
-    posted = _posted_ago(e.get("date_posted"), e.get("first_seen"))
+    posted = _posted_ago(e.get("date_posted"), e.get("first_seen"), lang)
     posted_html = f' · <span class="posted">{escape(posted)}</span>' if posted else ""
     # 📍 far-but-in-Germany marker (neutral gray, never competing with the score/⛔ — Von Restorff).
     far_html = ""
     if e.get("far"):
         dist = e.get("dist_km")
         anchor = e.get("geo_anchor")
-        tail = (f" · ~{int(round(float(dist)))} км до {escape(str(anchor).title())}"
+        tail = (t(lang, "card.far_tail", km=int(round(float(dist))), anchor=escape(str(anchor).title()))
                 if dist is not None and anchor else "")
-        far_html = f' · <span class="far">📍 далеко{tail}</span>'
-    # role-kind flag (W1): «🛠 hands-on — не твоё» / «🎓 стажёр» — quiet gray, never competes with the
-    # score/⛔ (Von Restorff). Computed from the title so it shows on both build + reopen paths.
-    role_flag = _rk.flag(_rk.classify(e.get("title"), e.get("summary")))
+        far_html = f' · <span class="far">{t(lang, "card.far")}{tail}</span>'
+    # role-kind flag (W1): «🛠 hands-on» / «🎓 intern» — quiet gray, never competes with the score/⛔
+    # (Von Restorff). Computed from the title so it shows on both build + reopen paths.
+    kind = _rk.classify(e.get("title"), e.get("summary"))
+    role_flag = t(lang, f"roleflag.{kind}") if kind in ("hands_on_engineer", "junior") else ""
     role_flag_html = f' · <span class="far">{escape(role_flag)}</span>' if role_flag else ""
-    verified_html = _verified_html(e.get("investigation"))   # deeper company review
+    verified_html = _verified_html(e.get("investigation"), lang)   # deeper company review
     # cross-account repost note (455 Laveer ≡ 906 Westinghouse): same role at another employer.
     also = [escape(str(c)) for c in (e.get("also_at") or []) if str(c).strip()]
-    also_html = f'<div class="vnote">также: {", ".join(also)}</div>' if also else ""
+    also_html = (f'<div class="vnote">{t(lang, "card.also", names=", ".join(also))}</div>'
+                 if also else "")
     # Eligibility severity (WS1b/1c): STRUCTURAL (PhD position / hard non-EN language) is the one red
     # ⛔ STOP; a SOFT prose-degree note renders muted amber and never sinks a strong-fit job.
     elig_note = escape(str(e.get("elig_note") or "").strip())
@@ -795,29 +815,33 @@ def _card_block(e: dict, *, show_applied: bool = True) -> str:
     stop_html = ""
     if elig_note:
         if severity == "soft":
-            stop_html = f'<div class="alert warn">⚠ Требование на грани: {elig_note} (но матч сильный)</div>'
+            stop_html = f'<div class="alert warn">{t(lang, "card.stop_soft", note=elig_note)}</div>'
         else:
-            stop_html = f'<div class="alert">⛔ Не проходишь по требованиям: {elig_note}</div>'
+            stop_html = f'<div class="alert">{t(lang, "card.stop_hard", note=elig_note)}</div>'
     # Per-skill match (collapsible). When present it supersedes the one-line fit ⚠ gap note.
-    skills_html = _skills_html(e)
-    enrich_html = _enrichment_html(e.get("enrichment"))   # Zotero-style snippets + pros/cons block
+    skills_html = _skills_html(e, lang)
+    enrich_html = _enrichment_html(e.get("enrichment"), lang)   # Zotero-style snippets + pros/cons
     fit_note = escape(str(e.get("fit_note") or "").strip())
+    fit_pct = f"{float(e.get('fit_score') or 0.0):.0%}"
     warn_html = "" if skills_html else (
-        f'<div class="alert warn">⚠ {fit_note} '
-        f'(совпадение {float(e.get("fit_score") or 0.0):.0%})</div>' if fit_note else "")
-    applied_btn = (f'<button aria-label="Откликнулась" title="Откликнулась (флаг поверх оценки)" '
-                   f"onclick=\"fb({vid},'applied',this)\">applied</button>") if show_applied else ""
+        f'<div class="alert warn">{t(lang, "card.fit_warn", note=fit_note, pct=fit_pct)}</div>'
+        if fit_note else "")
+    applied_btn = (f'<button aria-label="{escape(t(lang, "btn.applied_aria"))}" '
+                   f'title="{escape(t(lang, "btn.applied_title"))}" '
+                   f"onclick=\"fb({vid},'applied',this)\">{escape(t(lang, 'btn.applied_label'))}</button>"
+                   ) if show_applied else ""
     # free-text feedback (WS2): a note per card → why_freetext → judge few-shot. Pre-filled on reload.
-    # Selective Attention (laws-of-ux gate): hidden behind a "+ заметка" toggle placed AFTER the
-    # rating buttons so it never pre-empts the primary action; opens by default if a prior note exists.
+    # Selective Attention (laws-of-ux gate): hidden behind a "+ note" toggle placed AFTER the rating
+    # buttons so it never pre-empts the primary action; opens by default if a prior note exists.
     user_note = escape(str(e.get("user_note") or ""))
     note_open = bool((e.get("user_note") or "").strip())
     note_hidden = "" if note_open else ' style="display:none"'
     note_toggle = ("" if note_open else
                    f'<button type="button" class="note-toggle" id="notebtn-{vid}" '
-                   f'onclick="toggleNote({vid})">+ заметка</button>')
-    note_html = (f'<textarea class="note" id="note-{vid}" rows="2" aria-label="Заметка о вакансии" '
-                 f'placeholder="почему да/нет, что важно… (учит судью)"{note_hidden}>{user_note}</textarea>')
+                   f'onclick="toggleNote({vid})">{t(lang, "card.note_toggle")}</button>')
+    note_html = (f'<textarea class="note" id="note-{vid}" rows="2" '
+                 f'aria-label="{escape(t(lang, "card.note_aria"))}" '
+                 f'placeholder="{escape(t(lang, "card.note_placeholder"))}"{note_hidden}>{user_note}</textarea>')
     # data-* for the client-side filter chips (WS3)
     data_days = _days_ago(e.get("date_posted"), e.get("first_seen"))
     data_score = int(score) if score is not None else 0
@@ -842,109 +866,120 @@ class="meta2"> · {escape(str(e.get('work_mode') or ''))}{posted_html}{far_html}
   {verified_html}{also_html}
   <div class="expl">{escape(str(e.get('explanation') or ''))}</div>
   <div class="btns">
-    <button aria-label="Не для меня — офисная мышь" title="Офисная мышь — не для меня (=2)" onclick="fb({vid},'bad',this)">💻🐀</button>
-    <button aria-label="Интересно" title="Интересно (=4)" onclick="fb({vid},'good',this)">😎</button>
-    <button aria-label="Шабашка — мечта" title="Шабашка — мечта! (=5)" onclick="fb({vid},'star',this)">💅💸</button>
+    <button aria-label="{escape(t(lang, "btn.bad_aria"))}" title="{escape(t(lang, "btn.bad_title"))}" onclick="fb({vid},'bad',this)">💻🐀</button>
+    <button aria-label="{escape(t(lang, "btn.good_aria"))}" title="{escape(t(lang, "btn.good_title"))}" onclick="fb({vid},'good',this)">😎</button>
+    <button aria-label="{escape(t(lang, "btn.star_aria"))}" title="{escape(t(lang, "btn.star_title"))}" onclick="fb({vid},'star',this)">👸✨🧚</button>
     {applied_btn}
-    <a class="open" href="{escape(str(e.get('url') or '#'))}" target="_blank">открыть оригинал ↗</a>
+    <a class="open" href="{escape(str(e.get('url') or '#'))}" target="_blank">{t(lang, "card.open_original")}</a>
     <span class="fbstate muted">{fbstate}</span>
-    <span class="undo" onclick="undo({vid})">↶ изменить</span>
+    <span class="undo" onclick="undo({vid})">{t(lang, "card.undo")}</span>
   </div>
   {note_toggle}
   {note_html}
 </div>"""
 
 
-def _chip_row() -> str:
+def _chip_row(lang: str = DEFAULT_LANG) -> str:
     """WS3 filter chips (client-side, no endpoint): time window + relevance order + far toggle.
-    Default-on chips reflect _JS._F defaults (всё time, перспективные order, далеко shown) — nothing
-    is hidden until she narrows, so a curated slate is never silently truncated (Aesthetic-Usability).
+    Default-on chips reflect _JS._F defaults (all time, promising order, far shown) — nothing is
+    hidden until she narrows, so a curated slate is never silently truncated (Aesthetic-Usability).
     """
     # Chips are <button type=button> (not <span>) so they are keyboard-focusable + Enter/Space work
     # natively (WCAG 2.1.1; Jakob — native semantics). .chip CSS overrides the default button look.
     return (
         '<div class="chips">'
-        '<span class="lbl">⏱</span>'
-        '<button type="button" class="chip" data-group="time" onclick="chip(\'time\',1,this)">сегодня</button>'
-        '<button type="button" class="chip" data-group="time" onclick="chip(\'time\',3,this)">3 дня</button>'
-        '<button type="button" class="chip" data-group="time" onclick="chip(\'time\',7,this)">неделя</button>'
-        '<button type="button" class="chip on" data-group="time" onclick="chip(\'time\',1000000000,this)">всё</button>'
+        f'<span class="lbl">{t(lang, "chip.time_label")}</span>'
+        f'<button type="button" class="chip" data-group="time" onclick="chip(\'time\',1,this)">{t(lang, "chip.today")}</button>'
+        f'<button type="button" class="chip" data-group="time" onclick="chip(\'time\',3,this)">{t(lang, "chip.3days")}</button>'
+        f'<button type="button" class="chip" data-group="time" onclick="chip(\'time\',7,this)">{t(lang, "chip.week")}</button>'
+        f'<button type="button" class="chip on" data-group="time" onclick="chip(\'time\',1000000000,this)">{t(lang, "chip.all")}</button>'
         '<span class="lbl">·</span>'
-        '<button type="button" class="chip on" data-group="order" onclick="chip(\'order\',\'fit\',this)">🎯 перспективные</button>'
-        '<button type="button" class="chip" data-group="order" onclick="chip(\'order\',\'fresh\',this)">🆕 свежие</button>'
+        f'<button type="button" class="chip on" data-group="order" onclick="chip(\'order\',\'fit\',this)">{t(lang, "chip.promising")}</button>'
+        f'<button type="button" class="chip" data-group="order" onclick="chip(\'order\',\'fresh\',this)">{t(lang, "chip.fresh")}</button>'
         '<span class="lbl">·</span>'
-        '<button type="button" class="chip on" data-group="far" onclick="chip(\'far\',0,this)">📍 далеко</button>'
+        f'<button type="button" class="chip on" data-group="far" onclick="chip(\'far\',0,this)">{t(lang, "chip.far")}</button>'
         '<span class="lbl">·</span>'
-        '<button type="button" class="chip" data-group="weak" onclick="chip(\'weak\',0,this)">🙈 скрыть слабые</button>'
+        f'<button type="button" class="chip" data-group="weak" onclick="chip(\'weak\',0,this)">{t(lang, "chip.hide_weak")}</button>'
         '</div>'
     )
 
 
 # Compact COLLAPSED emoji legend (Jakob / Mental Model) — one shared header affordance so a
 # non-technical user can decode the card glyphs, without per-card noise (Von Restorff / Cognitive Load).
-_LEGEND_ITEMS = [
-    "💻🐀 офисная мышь (1) → 💅💸 шабашка (5) — оценка",
-    "⛔ не проходишь по требованиям", "⚠ риск / разрыв по навыкам",
-    "🎯 покрытие навыков", "📄 глубокий обзор вакансии",
-    "🛠 hands-on инженер — не твоё", "🎓 стажёр / junior",
-    "📍 далеко (но в Германии)", "🇩🇪 компания укоренена в Германии",
-    "🔎 проверка компании", "🧭 проверка интереса (explore)",
-]
+_LEGEND_KEYS = ["legend.score", "legend.stop", "legend.warn", "legend.skills", "legend.deepdive",
+                "legend.hands_on", "legend.junior", "legend.far", "legend.german",
+                "legend.research", "legend.explore"]
 
 
-def _legend_html() -> str:
-    return ('<details class="legend"><summary>❔ обозначения</summary><div class="leg">'
-            + "".join(f"<span>{escape(i)}</span>" for i in _LEGEND_ITEMS) + "</div></details>")
+def _legend_html(lang: str = DEFAULT_LANG) -> str:
+    return (f'<details class="legend"><summary>{t(lang, "legend.summary")}</summary><div class="leg">'
+            + "".join(f"<span>{escape(t(lang, k))}</span>" for k in _LEGEND_KEYS) + "</div></details>")
 
 
-def _page(h1: str, top_html: str, body: str) -> str:
-    """Самодостаточная HTML-оболочка, общая для slate и разметки."""
-    return f"""<!doctype html><html lang="ru"><head><meta charset="utf-8">
+def _lang_toggle(lang: str) -> str:
+    """Header language switcher: links to ?lang=<other> for every available locale (a new locale JSON
+    appears here for free). The active language is shown bold-disabled."""
+    links = []
+    for code in available_langs():
+        name = escape(t(code, "lang.name"))
+        if code == lang:
+            links.append(f'<b>{name}</b>')
+        else:
+            links.append(f'<a href="?lang={code}">{name}</a>')
+    return f'<span class="langsw">{" · ".join(links)}</span>'
+
+
+def _page(h1: str, top_html: str, body: str, lang: str = DEFAULT_LANG) -> str:
+    """Self-contained HTML shell shared by every page. `lang` sets the <html> lang + the toggle."""
+    return f"""<!doctype html><html lang="{lang}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{escape(h1)}</title><style>{_CSS}</style></head>
 <body>
+<div class="topbar">{_lang_toggle(lang)}</div>
 <h1>{escape(h1)}</h1>
 {top_html}
 {body}
-<script>{_JS}</script>
+<script>{_js(lang)}</script>
 </body></html>"""
 
 
 # UI fetch trigger (the "how do I fetch new vacancies from the UI" answer). Runs the full pipeline
 # async server-side (single-flight); the button polls /fetch-status via triggerFetch().
-_FETCH_BTN = ('<button id="fetch-btn" onclick="triggerFetch()" title="Собрать свежие вакансии '
-              '(несколько минут)">🔄 обновить вакансии</button>'
-              '<span id="fetch-status" class="muted"></span>')
+def _fetch_btn(lang: str = DEFAULT_LANG) -> str:
+    return (f'<button id="fetch-btn" onclick="triggerFetch()" '
+            f'title="{escape(t(lang, "fetch.btn_title"))}">{t(lang, "fetch.btn")}</button>'
+            '<span id="fetch-status" class="muted"></span>')
 
 
 def render_html(slate: list[dict], slate_date: str, alerts: list[str] | None = None,
-                dedup_count: int | None = None) -> str:
-    """Дневной slate. Кнопки → POST /feedback. alerts → баннер деградации. dedup_count → видимый
-    маркер «дедуп произошёл» (logged-not-merged иначе невидим). Кнопка 🔄 запускает фетч (async).
+                dedup_count: int | None = None, lang: str = DEFAULT_LANG) -> str:
+    """Daily slate. Buttons → POST /feedback. alerts → a degradation banner. dedup_count → a visible
+    'dedup happened' marker (logged-not-merged is otherwise invisible). The 🔄 button starts a fetch.
 
-    Легенда оценок убрана из шапки (Working Memory) — смысл кнопки живёт в её title-подсказке;
-    шапка несёт прогресс N/M (Goal-Gradient) и навигацию на страницу разметки."""
-    body = ('<div id="cards">' + "\n".join(_card_block(e) for e in slate) + "</div>") if slate \
-        else '<p class="muted">Сегодня slate пуст — нет оценённых вакансий.</p>'
+    The score legend is collapsed out of the header (Working Memory) — the button's meaning lives in
+    its title tooltip; the header carries the N/M progress (Goal-Gradient) + nav to the other pages."""
+    body = ('<div id="cards">' + "\n".join(_card_block(e, lang=lang) for e in slate) + "</div>") \
+        if slate else f'<p class="muted">{t(lang, "slate.empty")}</p>'
     banner = ""
     if alerts:
         items = "; ".join(escape(str(a)) for a in alerts)
-        banner = (f'<div class="alert">⚠ Деградация источников: {items} '
-                  f'— часть рынка могла не собраться (см. <a href="/funnel">воронку</a>).</div>')
+        banner = f'<div class="alert">{t(lang, "slate.degraded", items=items, lang=lang)}</div>'
     total = len(slate)
     done = sum(1 for e in slate if e.get("feedback"))
-    head = "✅ Готово · " if (done >= total and total) else "Отмечено "
-    progress = (f'<p class="progress" id="progress" data-total="{total}">{head}{done}/{total}</p>'
-                if total else "")
-    dedup = (f'<p class="muted">🔁 дедуп: {dedup_count} похожих вакансий помечено за последний '
-             f'сбор (свёрнуты на карточках «также:»; см. <a href="/funnel">воронку</a>)</p>'
+    pkey = "progress.done" if (done >= total and total) else "progress.marked"
+    progress = (f'<p class="progress" id="progress" data-total="{total}">'
+                f'{t(lang, pkey, done=done, total=total)}</p>' if total else "")
+    dedup = (f'<p class="muted">{t(lang, "slate.dedup", n=dedup_count, lang=lang)}</p>'
              if dedup_count else "")
-    nav = (f'<p class="nav muted"><a href="/annotate">разметить ещё ↗</a>'
-           f'<a href="/eval">валидация ↗</a><a href="/gaps">пробелы ↗</a>'
-           f'<a href="/tasks">задачи ↗</a><a href="/funnel">воронка ↗</a> {_FETCH_BTN}</p>')
-    chips = _chip_row() if slate else ""
-    legend = _legend_html() if slate else ""
-    return _page(f"Slate · {slate_date}", banner + nav + progress + dedup + legend + chips, body)
+    nav = (f'<p class="nav muted"><a href="/annotate?lang={lang}">{t(lang, "nav.annotate_more")}</a>'
+           f'<a href="/eval?lang={lang}">{t(lang, "nav.eval")}</a>'
+           f'<a href="/gaps?lang={lang}">{t(lang, "nav.gaps")}</a>'
+           f'<a href="/tasks?lang={lang}">{t(lang, "nav.tasks")}</a>'
+           f'<a href="/funnel?lang={lang}">{t(lang, "nav.funnel")}</a> {_fetch_btn(lang)}</p>')
+    chips = _chip_row(lang) if slate else ""
+    legend = _legend_html(lang) if slate else ""
+    return _page(t(lang, "slate.title", date=slate_date),
+                 banner + nav + progress + dedup + legend + chips, body, lang)
 
 
 def annotation_batch(cfg: dict, con, slate_date: str) -> tuple[list[dict], int]:
@@ -967,94 +1002,94 @@ def annotation_batch(cfg: dict, con, slate_date: str) -> tuple[list[dict], int]:
     return items[:n], total
 
 
-def render_annotate_html(items: list[dict], slate_date: str, *, total_pending: int) -> str:
-    """Единственная поверхность разметки (xlsx-пакет ретайрнут). Та же карточка и кнопки
-    👎/👍/⭐ (без 'applied' — к случайной вакансии из очереди «откликнуться» нечем)."""
-    body = ('<div id="cards">' + "\n".join(_card_block(e, show_applied=False) for e in items)
-            + "</div>") if items \
-        else '<p class="muted">Очередь разметки пуста — все оценённые вакансии размечены. ✅</p>'
+def render_annotate_html(items: list[dict], slate_date: str, *, total_pending: int,
+                         lang: str = DEFAULT_LANG) -> str:
+    """The single annotation surface (the xlsx pack is retired). Same card + same 💻🐀/😎/👸✨🧚
+    buttons (no 'applied' — there's nothing to "apply to" for a random queued job)."""
+    body = ('<div id="cards">' + "\n".join(_card_block(e, show_applied=False, lang=lang)
+            for e in items) + "</div>") if items \
+        else f'<p class="muted">{t(lang, "annotate.empty")}</p>'
     total = len(items)
-    shown = f" (показаны {total} из {total_pending})" if total_pending > total else ""
-    progress = (f'<p class="progress" id="progress" data-total="{total}">Отмечено 0/{total}</p>'
-                if total else "")
-    nav = (f'<p class="nav muted"><a href="/">← сегодняшний slate</a>'
-           f'<a href="/eval">валидация ↗</a><a href="/gaps">пробелы ↗</a>'
-           f'<a href="/tasks">задачи ↗</a><a href="/funnel">воронка ↗</a> {_FETCH_BTN}</p>')
+    shown = t(lang, "annotate.shown", shown=total, total=total_pending) if total_pending > total else ""
+    progress = (f'<p class="progress" id="progress" data-total="{total}">'
+                f'{t(lang, "progress.marked", done=0, total=total)}</p>' if total else "")
+    nav = (f'<p class="nav muted"><a href="/?lang={lang}">{t(lang, "nav.slate_today")}</a>'
+           f'<a href="/eval?lang={lang}">{t(lang, "nav.eval")}</a>'
+           f'<a href="/gaps?lang={lang}">{t(lang, "nav.gaps")}</a>'
+           f'<a href="/tasks?lang={lang}">{t(lang, "nav.tasks")}</a>'
+           f'<a href="/funnel?lang={lang}">{t(lang, "nav.funnel")}</a> {_fetch_btn(lang)}</p>')
     # Tesler/Jakob (laws-of-ux gate): the slate's time/order/far filter chips are dropped here — they
     # are meaningless on an unlabeled shuffle queue. Keep the shared emoji legend.
-    legend = _legend_html() if items else ""
-    return _page(f"Разметка · {total_pending} в очереди{shown}", nav + progress + legend, body)
+    legend = _legend_html(lang) if items else ""
+    return _page(t(lang, "annotate.title", n=total_pending, shown=shown), nav + progress + legend,
+                 body, lang)
 
 
-def render_eval_html(report: dict) -> str:
+def render_eval_html(report: dict, lang: str = DEFAULT_LANG) -> str:
     """Validation dashboard: matcher ranking-quality vs Alina's REAL labels (schabasch.validation).
     Von Restorff: one headline (the clean fit_score). Goal-Gradient: a "rate more in /annotate"
     banner until enough labels accrue. No inputs — the page only reads (Tesler)."""
-    nav = ('<p class="nav muted"><a href="/">← slate</a>'
-           '<a href="/annotate">разметка ↗</a><a href="/gaps">пробелы ↗</a>'
-           '<a href="/funnel">воронка ↗</a></p>')
+    nav = (f'<p class="nav muted"><a href="/?lang={lang}">{t(lang, "nav.slate")}</a>'
+           f'<a href="/annotate?lang={lang}">{t(lang, "nav.annotate")}</a>'
+           f'<a href="/gaps?lang={lang}">{t(lang, "nav.gaps")}</a>'
+           f'<a href="/funnel?lang={lang}">{t(lang, "nav.funnel")}</a></p>')
     if report["n_labels"] == 0:
-        body = ('<p class="muted">Пока нет твоих оценок. Размечай вакансии в '
-                '<a href="/annotate">/annotate</a> — метрики появятся здесь автоматически.</p>')
-        return _page("Валидация матчинга", nav, body)
+        body = f'<p class="muted">{t(lang, "eval.empty", lang=lang)}</p>'
+        return _page(t(lang, "eval.title"), nav, body, lang)
 
     h = report["headline"]
-    headline = (f'<p class="headline">Матчинг против твоих оценок: '
-                f'pairwise {h["pairwise_acc"]:.0%} · NDCG@10 {h["ndcg@10"]:.2f}</p>')
+    pw = f'{h["pairwise_acc"]:.0%}'
+    nd = f'{h["ndcg@10"]:.2f}'
+    headline = f'<p class="headline">{t(lang, "eval.headline", pairwise=pw, ndcg=nd)}</p>'
     banner = ""
     if not report["reliable"]:
-        banner = (f'<div class="alert warn">📊 {report["n_labels"]} оценок '
-                  f'({report["n_comparable_pairs"]} сравнимых пар) — метрики становятся надёжными '
-                  f'примерно с {report["min_pairs"]} пар. Размечай ещё в '
-                  f'<a href="/annotate">/annotate</a> ↗</div>')
+        msg = t(lang, "eval.banner", n=report["n_labels"], pairs=report["n_comparable_pairs"],
+                min=report["min_pairs"], lang=lang)
+        banner = f'<div class="alert warn">{msg}</div>'
+    c_sig, c_pw, c_nd, c_sp, c_n = (t(lang, "eval.col.signal"), t(lang, "eval.col.pairwise"),
+                                    t(lang, "eval.col.ndcg"), t(lang, "eval.col.spearman"),
+                                    t(lang, "eval.col.n"))
+    leaky = t(lang, "eval.leaky")
     trs = []
     for r in report["rows"]:
-        tag = "" if r.get("clean") else ' <span class="leaky">⚠ обучается на метках</span>'
-        trs.append(f'<tr><td data-label="сигнал">{escape(str(r.get("label") or r["name"]))}{tag}</td>'
-                   f'<td data-label="pairwise">{r["pairwise_acc"]:.0%}</td>'
-                   f'<td data-label="NDCG@10">{r["ndcg@10"]:.2f}</td>'
-                   f'<td data-label="spearman">{r["spearman"]:.2f}</td>'
-                   f'<td data-label="n">{r["n"]}</td></tr>')
-    table = ('<table class="metrics"><thead><tr><th>сигнал</th><th>pairwise</th><th>NDCG@10</th>'
-             '<th>spearman</th><th>n</th></tr></thead><tbody>' + "".join(trs) + "</tbody></table>")
-    note = ('<p class="muted">«Чистые» сигналы (fit_score / cross-encoder / покрытие / eligibility) '
-            'считаются по CV↔вакансии и НЕ видят твои метки — это честная оценка матчинга. Судья и '
-            'triage обучаются на метках, поэтому против тех же меток дают оптимистичный результат '
-            '(помечены ⚠).</p>')
-    return _page("Валидация матчинга", nav, headline + banner + table + note)
+        tag = "" if r.get("clean") else f' <span class="leaky">{leaky}</span>'
+        trs.append(f'<tr><td data-label="{c_sig}">{escape(str(r.get("label") or r["name"]))}{tag}</td>'
+                   f'<td data-label="{c_pw}">{r["pairwise_acc"]:.0%}</td>'
+                   f'<td data-label="{c_nd}">{r["ndcg@10"]:.2f}</td>'
+                   f'<td data-label="{c_sp}">{r["spearman"]:.2f}</td>'
+                   f'<td data-label="{c_n}">{r["n"]}</td></tr>')
+    table = (f'<table class="metrics"><thead><tr><th>{c_sig}</th><th>{c_pw}</th><th>{c_nd}</th>'
+             f'<th>{c_sp}</th><th>{c_n}</th></tr></thead><tbody>' + "".join(trs) + "</tbody></table>")
+    note = f'<p class="muted">{t(lang, "eval.note")}</p>'
+    return _page(t(lang, "eval.title"), nav, headline + banner + table + note, lang)
 
 
-_THEME_LABEL = {
-    "engineer-repellent": "🛠 Инженерные / hands-on роли",
-    "junior-floor": "🎓 Стажёр / working-student",
-    "gap-too-big": "❗ Слишком большой разрыв",
-    "jd-slop": "🤖 Мусорные описания (AI-слоп)",
-    "degree-misread": "🎓 Степень: неверная интерпретация",
-    "degree-gap": "🎓 Степень: реальный разрыв (PhD)",
-    "hidden-de": "🇩🇪 Скрытый немецкий",
-    "duplicate": "🔁 Дубликаты",
-    "pref": "💡 Предпочтения (lead / дедлайны)",
-    "other": "📝 Прочее",
-}
+def _theme_label(lang: str, theme: str) -> str:
+    """Localized theme label; falls back to the raw theme tag if no locale key exists."""
+    lbl = t(lang, f"theme.{theme}")
+    return theme if lbl == f"theme.{theme}" else lbl
 
 
-def render_tasks_html(tasks: list[dict], summary: dict) -> str:
+def render_tasks_html(tasks: list[dict], summary: dict, lang: str = DEFAULT_LANG) -> str:
     """Comment-tracker page: every review comment as a theme-grouped task with an open|accounted|
     wontfix toggle — the "which feedback did the product act on, which not" audit (W1). Reuses the
-    shared shell + _JS (taskStatus). Read-and-toggle only (Tesler)."""
-    nav = ('<p class="nav muted"><a href="/">← slate</a><a href="/annotate">разметка ↗</a>'
-           '<a href="/eval">валидация ↗</a><a href="/gaps">пробелы ↗</a>'
-           '<a href="/funnel">воронка ↗</a></p>')
+    shared shell + JS (taskStatus). Read-and-toggle only (Tesler)."""
+    nav = (f'<p class="nav muted"><a href="/?lang={lang}">{t(lang, "nav.slate")}</a>'
+           f'<a href="/annotate?lang={lang}">{t(lang, "nav.annotate")}</a>'
+           f'<a href="/eval?lang={lang}">{t(lang, "nav.eval")}</a>'
+           f'<a href="/gaps?lang={lang}">{t(lang, "nav.gaps")}</a>'
+           f'<a href="/funnel?lang={lang}">{t(lang, "nav.funnel")}</a></p>')
     if not tasks:
-        body = ('<p class="muted">Комментариев пока нет. Оставляй заметки на карточках в '
-                '<a href="/">slate</a>/<a href="/annotate">разметке</a>, затем запусти '
-                '<code>python -m scripts.ingest_comment_tasks</code> — они появятся здесь.</p>')
-        return _page("Задачи из комментариев", nav, body)
+        body = f'<p class="muted">{t(lang, "tasks.empty", lang=lang)}</p>'
+        return _page(t(lang, "tasks.title"), nav, body, lang)
 
-    badge_of = {"accounted": "✅ учтено", "wontfix": "🚫 не нужно", "open": "⏳ открыто"}
+    badge_of = {"accounted": t(lang, "tasks.status.accounted"),
+                "wontfix": t(lang, "tasks.status.wontfix"), "open": t(lang, "tasks.status.open")}
+    col_comment, col_acc = t(lang, "tasks.col.comment"), t(lang, "tasks.col.accounted")
+    col_acc_s, col_status = t(lang, "tasks.col.accounted_short"), t(lang, "tasks.col.status")
     groups: dict[str, list[dict]] = {}
-    for t in tasks:
-        groups.setdefault(t["theme_tag"], []).append(t)
+    for tk in tasks:
+        groups.setdefault(tk["theme_tag"], []).append(tk)
     sections = []
     # show acted/recurring themes first; "other"/"pref" last
     order = ["jd-slop", "engineer-repellent", "junior-floor", "gap-too-big", "degree-misread",
@@ -1062,65 +1097,62 @@ def render_tasks_html(tasks: list[dict], summary: dict) -> str:
     for theme in sorted(groups, key=lambda th: order.index(th) if th in order else 99):
         items = groups[theme]
         rows = []
-        for t in items:
-            tid = t["id"]
-            st = t["task_status"]
+        for tk in items:
+            tid = tk["id"]
+            st = tk["task_status"]
             meta = " · ".join(filter(None, [
-                escape(str(t.get("company") or "")),
-                (f"оценка {t['score_1_5']}/5" if t.get("score_1_5") is not None else "")]))
+                escape(str(tk.get("company") or "")),
+                (t(lang, "tasks.score", s=tk["score_1_5"]) if tk.get("score_1_5") is not None else "")]))
             rows.append(
                 f'<tr id="task-{tid}" data-status="{escape(st)}">'
-                f'<td data-label="комментарий">{escape(str(t["comment_text"]))}'
+                f'<td data-label="{col_comment}">{escape(str(tk["comment_text"]))}'
                 f'{("<div class=\"muted\">" + meta + "</div>") if meta else ""}</td>'
-                f'<td data-label="как учтено">{escape(str(t.get("product_change") or ""))}</td>'
-                f'<td data-label="статус"><span class="tstate">{badge_of.get(st, st)}</span><br>'
-                f'<button aria-label="Отметить учтённым" title="учтено" onclick="taskStatus({tid},\'accounted\')">✅</button>'
-                f'<button aria-label="Отметить открытым" title="открыто" onclick="taskStatus({tid},\'open\')">⏳</button>'
-                f'<button aria-label="Отметить ненужным" title="не нужно" onclick="taskStatus({tid},\'wontfix\')">🚫</button></td></tr>')
+                f'<td data-label="{col_acc_s}">{escape(str(tk.get("product_change") or ""))}</td>'
+                f'<td data-label="{col_status}"><span class="tstate">{badge_of.get(st, st)}</span><br>'
+                f'<button aria-label="{escape(t(lang, "tasks.btn.accounted_aria"))}" title="{escape(t(lang, "tasks.btn.accounted_title"))}" onclick="taskStatus({tid},\'accounted\')">✅</button>'
+                f'<button aria-label="{escape(t(lang, "tasks.btn.open_aria"))}" title="{escape(t(lang, "tasks.btn.open_title"))}" onclick="taskStatus({tid},\'open\')">⏳</button>'
+                f'<button aria-label="{escape(t(lang, "tasks.btn.wontfix_aria"))}" title="{escape(t(lang, "tasks.btn.wontfix_title"))}" onclick="taskStatus({tid},\'wontfix\')">🚫</button></td></tr>')
         sections.append(
-            f'<h2 style="font-size:15px;margin:16px 0 4px">{escape(_THEME_LABEL.get(theme, theme))} '
+            f'<h2 style="font-size:15px;margin:16px 0 4px">{escape(_theme_label(lang, theme))} '
             f'({len(items)})</h2>'
-            f'<table class="metrics"><thead><tr><th>комментарий</th><th>как учтено в продукте</th>'
-            f'<th>статус</th></tr></thead><tbody>' + "".join(rows) + "</tbody></table>")
-    headline = (f'<p class="headline">Комментарии с просмотров вакансий: '
-                f'{summary.get("accounted", 0)} учтено · {summary.get("open", 0)} открыто · '
-                f'{summary.get("wontfix", 0)} не нужно (всего {summary.get("total", 0)})</p>')
-    note = ('<p class="muted">Каждый твой комментарий стал задачей с темой. «Как учтено» — что '
-            'продукт делает по этой теме. Нажми ✅/⏳/🚫, если не согласен с авто-вердиктом. Новые '
-            'комментарии подтягиваются командой <code>ingest_comment_tasks</code>.</p>')
-    return _page("Задачи из комментариев", nav, headline + "".join(sections) + note)
+            f'<table class="metrics"><thead><tr><th>{col_comment}</th><th>{col_acc}</th>'
+            f'<th>{col_status}</th></tr></thead><tbody>' + "".join(rows) + "</tbody></table>")
+    hl = t(lang, "tasks.headline", accounted=summary.get("accounted", 0),
+           open=summary.get("open", 0), wontfix=summary.get("wontfix", 0),
+           total=summary.get("total", 0))
+    headline = f'<p class="headline">{hl}</p>'
+    note = f'<p class="muted">{t(lang, "tasks.note")}</p>'
+    return _page(t(lang, "tasks.title"), nav, headline + "".join(sections) + note, lang)
 
 
-def render_gaps_html(report: dict) -> str:
-    """Skill-gap dashboard (schabasch.gaps): across the jobs Alina WANTS (👍/💅💸/applied), which
+def render_gaps_html(report: dict, lang: str = DEFAULT_LANG) -> str:
+    """Skill-gap dashboard (schabasch.gaps): across the jobs Alina WANTS (😎/👸✨🧚/applied), which
     requirements recur as ✗ missing / ◐ partial. A 'not on my CV → add it or learn it' list."""
-    nav = ('<p class="nav muted"><a href="/">← slate</a><a href="/annotate">разметка ↗</a>'
-           '<a href="/eval">валидация ↗</a><a href="/funnel">воронка ↗</a></p>')
+    nav = (f'<p class="nav muted"><a href="/?lang={lang}">{t(lang, "nav.slate")}</a>'
+           f'<a href="/annotate?lang={lang}">{t(lang, "nav.annotate")}</a>'
+           f'<a href="/eval?lang={lang}">{t(lang, "nav.eval")}</a>'
+           f'<a href="/funnel?lang={lang}">{t(lang, "nav.funnel")}</a></p>')
     n_wanted = report.get("n_wanted", 0)
     rows = report.get("rows") or []
     if n_wanted == 0 or not rows:
-        body = ('<p class="muted">Пока нет «желанных» вакансий с разобранными требованиями. '
-                'Отмечай 😎/💅💸 в <a href="/annotate">/annotate</a> — здесь появится, каких навыков '
-                'регулярно не хватает под желанные роли.</p>')
-        return _page("Пробелы в навыках", nav, body)
-    headline = (f'<p class="headline">Чего не хватает под желанные роли '
-                f'({n_wanted} вакансий, разбор требований по {report.get("n_jobs_with_reqs", 0)})</p>')
+        body = f'<p class="muted">{t(lang, "gaps.empty", lang=lang)}</p>'
+        return _page(t(lang, "gaps.title"), nav, body, lang)
+    headline = (f'<p class="headline">'
+                f'{t(lang, "gaps.headline", n=n_wanted, parsed=report.get("n_jobs_with_reqs", 0))}</p>')
     banner = ""
     if not report.get("reliable"):
-        banner = (f'<div class="alert warn">📊 всего {n_wanted} желанных вакансий — отмечай больше '
-                  f'в <a href="/annotate">/annotate</a>, чтобы пробелы стали статистически значимыми.</div>')
+        banner = f'<div class="alert warn">{t(lang, "gaps.banner", n=n_wanted, lang=lang)}</div>'
+    c_req = t(lang, "gaps.td.req")
     trs = []
     for r in rows:
-        trs.append(f'<tr><td data-label="требование">{escape(str(r["requirement"]))}</td>'
-                   f'<td data-label="нет">{r["missing"]} ✗</td>'
-                   f'<td data-label="частично">{r["partial"]} ◐</td>'
-                   f'<td data-label="есть">{r["present"]} ✓</td>'
-                   f'<td data-label="в N">{r["jobs"]}</td></tr>')
-    table = ('<table class="metrics"><thead><tr><th>требование (в желанных ролях)</th><th>нет</th>'
-             '<th>частично</th><th>есть</th><th>в N вакансий</th></tr></thead><tbody>'
-             + "".join(trs) + "</tbody></table>")
-    note = ('<p class="muted">Агрегировано по твоим 😎/💅💸/applied вакансиям и LLM-разбору их '
-            'требований. «Нет/частично» обычно = «не указано в CV» → кандидат на добавление в резюме '
-            'или на обучение. Формулировки требований кластеризуются приблизительно (LLM по-разному '
-            'их называет).</p>')
-    return _page("Пробелы в навыках", nav, headline + banner + table + note)
+        trs.append(f'<tr><td data-label="{c_req}">{escape(str(r["requirement"]))}</td>'
+                   f'<td data-label="{t(lang, "gaps.col.missing")}">{r["missing"]} ✗</td>'
+                   f'<td data-label="{t(lang, "gaps.col.partial")}">{r["partial"]} ◐</td>'
+                   f'<td data-label="{t(lang, "gaps.col.present")}">{r["present"]} ✓</td>'
+                   f'<td data-label="{t(lang, "gaps.col.jobs")}">{r["jobs"]}</td></tr>')
+    table = (f'<table class="metrics"><thead><tr><th>{t(lang, "gaps.col.req")}</th>'
+             f'<th>{t(lang, "gaps.col.missing")}</th><th>{t(lang, "gaps.col.partial")}</th>'
+             f'<th>{t(lang, "gaps.col.present")}</th><th>{t(lang, "gaps.col.jobs")}</th></tr></thead>'
+             f'<tbody>' + "".join(trs) + "</tbody></table>")
+    note = f'<p class="muted">{t(lang, "gaps.note")}</p>'
+    return _page(t(lang, "gaps.title"), nav, headline + banner + table + note, lang)
