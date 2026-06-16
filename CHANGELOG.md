@@ -5,6 +5,28 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Frontier eval — LLM-canonical-JD → embed (decision record; NOT shipped) (2026-06-16)
+- New `eval/canonical_jd_experiment.py`: tests the purest "LLM-extracts-for-ML" form — LLM-extract a
+  canonical JD skills/requirements list → embed (bge-m3) → CV-cosine signal — vs the raw-JD baseline +
+  production `fit_score`, with **bootstrap 95% CIs** over Alina's 50 real labels + a **5-fold held-out blend**.
+- **Result:** extractor strength is the lever — **35B canon→cv_full 0.713 pairwise** (clears raw-JD baseline
+  0.511; ≈ HyRE 0.724) vs **qwen canon 0.582** (weak). Confirms "complex extraction wants the bigger model".
+- **Decision: NOT wired into `fit_weights`** — the held-out blend does NOT improve (`fit+canon` 0.536 <
+  fit-alone 0.609; α_fit→1.0): it's **redundant with HyRE** (already LLM→embed). n=50 → CIs wide; revisit at
+  ≥75–100 labels. Validates the architecture thesis without a production change. (Phase-separated extract→eval
+  so the 22GB 35B never co-loads with the embedder.)
+
+### English-first repo + bilingual UI toggle + new «шабашка» emoji + README screenshots (2026-06-16)
+- **English-first.** README + docs translated to English; «шабашка»/«office mouse» kept as glossed
+  signature terms (README Glossary). UI strings extracted to a data-driven i18n layer.
+- **Bilingual UI.** New `schabasch/i18n.py` + `schabasch/locales/{en,ru}.json` (164 keys); `slate.py`/
+  `feedback_app.py` thread `lang`; English default + 🇷🇺 toggle via `?lang=`. Add a locale = drop a JSON.
+- **Emoji.** Score-5 «шабашка» `💅💸` → **👸✨🧚** everywhere (code/docs/tests); 💻🐀/🐭/😐/😎 unchanged.
+- **Screenshots.** `scripts/gen_screenshots.py` renders the 4 pages from synthetic demo data → PNGs in
+  `docs/screenshots/` (no PII, reproducible) embedded on the README front page.
+- **Matcher doc fix.** README now states the real `fit_score = 0.7·HyRE + 0.3·bge-m3 sparse` (was a stale 0.6/0.4).
+- Tests: `test_i18n` (locale key-parity) + a slate bilingual toggle test; ~10 RU assertions → EN. 348 green.
+
 ### Agent → local MLX 35B (verified sota-grade) · escalation collapsed to a single small tier (2026-06-16)
 - **`llm.roles.agent` → MLX 35B (`:8082`)** as the investigate/discover model. Verified live: ~25s/
   fetchable card, finalizes, **honest** (caught Hamilton Barnes = recruiter; ABB = Swiss; no fabricated
