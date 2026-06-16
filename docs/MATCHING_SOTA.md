@@ -114,7 +114,7 @@ no set-relative min-max). Card: `sota-pattern-index/.../bge-m3/native-hybrid-fus
 
 ## Role-kind soft down-rank — measured on 50 REAL labels (2026-06-16)
 
-Her review comments are emphatic & repeated: «никаких инженеров / не хочу руками, хочу головой»
+Her review comments are emphatic & repeated: "no engineers / I don't want to work with my hands, I want to work with my head"
 (≥4 jobs) + intern/working-student rejections. A deterministic title classifier (`schabasch/role_kind.py`)
 adds a multiplicative down-rank to `slate._effective` (`× role_kind_mult`), **never a hard drop** (recall-first):
 
@@ -126,15 +126,15 @@ adds a multiplicative down-rank to `slate._effective` (`× role_kind_mult`), **n
 | neutral (BA/PM/owner) | 23 | **3.00** | 1.0       |
 
 The down-rank tracks her ratings cleanly (engineer/junior ≈2.0 vs neutral ≈3.0). Only **1 of 25**
-down-ranked jobs is high-rated — the VINFAST "ML Optimization Engineer" (4) she flagged «правда прикольный,
-но инженер»; it's softly demoted (×0.7), **still explore-eligible**, not hidden. A `lead`/`principal`
-engineering role is head-not-hands work she likes → NOT penalized. Cards show a quiet `🛠 hands-on` / `🎓 стажёр` flag.
+down-ranked jobs is high-rated — the VINFAST "ML Optimization Engineer" (4) she flagged "really cool,
+but an engineer"; it's softly demoted (×0.7), **still explore-eligible**, not hidden. A `lead`/`principal`
+engineering role is head-not-hands work she likes → NOT penalized. Cards show a quiet `🛠 hands-on` / `🎓 intern` flag.
 
 ## Model cascade for hard reasoning (2026-06-16)
 
 `schabasch/llm_clients.py` routes per role: Tier-0 ollama qwen3:8b (bulk, unchanged) → Tier-1 local
 Qwen3.6-35B MLX (`:8082`) → Tier-2 api.kather.ai `sota`. The Zotero-style card enrichment
 (`schabasch/enrichment.py`) uses the cascade for pros/cons + deep company + a **clean re-parse of muddy
-«AI-слоп» ads** (escalates to `sota` when `slop_score ≥ deep.slop_escalate_thr`). Extractive snippets via
+"AI-slop" ads** (escalates to `sota` when `slop_score ≥ deep.slop_escalate_thr`). Extractive snippets via
 bge-reranker are deterministic (always available); abstractive degrades gracefully. Verified live: kather
-`sota` re-parsed the MAM IT-Controlling JD into "роль финансового контролёра в IT, а не бизнес-аналитика".
+`sota` re-parsed the MAM IT-Controlling JD into "a financial-controller role in IT, not a business analyst".

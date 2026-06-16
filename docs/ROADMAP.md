@@ -1,169 +1,169 @@
 # Schabaschkascuhen — Roadmap
 
-> Зачем этот файл: [USE_CASE.md](../USE_CASE.md) отвечает «что и для кого», этот документ — «в каком
-> порядке, почему в таком, и как мы узнаём, что фаза закончилась». Каждая фаза имеет **ворота
-> (gate)** — измеримое условие выхода. Без прохождения ворот следующая фаза не начинается.
-> Сопутствующие документы: [spike/SPIKE_REPORT.md](../spike/SPIKE_REPORT.md) (измеренная реальность),
-> [docs/LITERATURE_REVIEW.md](LITERATURE_REVIEW.md) (литература + SOTA + import-лист).
+> Why this file exists: [USE_CASE.md](../USE_CASE.md) answers "what and for whom", this document — "in what
+> order, why in this order, and how we know a phase is done". Each phase has a **gate** — a measurable
+> exit condition. Without passing the gate, the next phase does not begin.
+> Companion documents: [spike/SPIKE_REPORT.md](../spike/SPIKE_REPORT.md) (measured reality),
+> [docs/LITERATURE_REVIEW.md](LITERATURE_REVIEW.md) (literature + SOTA + import list).
 
-## Северная звезда и зачем мы это строим
+## North Star and why we are building this
 
-Влад ищет «шабашку» — работу мечты в новой для себя области (не биотех), Heidelberg/Frankfurt,
-гибрид, английский + интеграция в Германию. Ключевая особенность: **эталонов нет** — система
-должна *найти* вкус по его оценкам, а не сматчить с образцом. Сегодняшняя боль: ~час в день на
-чтение разноформатного мусора, скрытые требования немецкого (измерено: **18.1%** англоязычных
-вакансий — ловушка).
+Vlad is looking for a «шабашка» — the dream/jackpot gig in a field new to him (not biotech), Heidelberg/Frankfurt,
+hybrid, English + integration into Germany. The key feature: **there are no reference examples** — the system
+must *discover* his taste from his ratings, not match against a sample. Today's pain: ~an hour a day spent
+reading mixed-format junk, hidden German requirements (measured: **18.1%** of English-language
+vacancies are a trap).
 
-**North Star:** ≥3 нажатия `applied` на вакансиях с оценкой 5 за первые 2 месяца daily-режима.
-**Прокси-метрики:** ≤10 мин/день; ≥1 😎/💅💸 в slate ≥50% дней; judge↔Влад agreement ≥75% (5-fold CV,
-выше majority-baseline + 10 п.п.).
+**North Star:** ≥3 `applied` clicks on vacancies rated 5 within the first 2 months of daily mode.
+**Proxy metrics:** ≤10 min/day; ≥1 😎/👸✨🧚 in the slate ≥50% of days; judge↔Vlad agreement ≥75% (5-fold CV,
+above majority-baseline + 10 pp).
 
-## Принципы (зафиксированы целью проекта)
+## Principles (fixed by the project's goal)
 
-1. **Минимум писать самим — всё импортировать**: форк/импорт/копия паттерна всегда приоритетнее
-   собственного кода. Каждый компонент в карте ниже имеет явную пометку источника.
-2. **$0 и локально**: ollama (qwen3.5:4b / qwen3:8b) + bge-m3 из HF-кэша; API — только фоллбек.
-3. **Ворота с измерениями, не с мнениями**: фаза закрывается числом (как спайк закрыл шаг 0).
-4. **Разметка — ядро продукта, не подготовка**: каждый клик Влада растит golden dataset.
-5. **Свежесть вакансий для разметки не важна** — материал берём из уже собранного пула.
+1. **Write as little ourselves as possible — import everything**: a fork/import/copy of a pattern always takes
+   priority over our own code. Every component in the map below carries an explicit source tag.
+2. **$0 and local**: ollama (qwen3.5:4b / qwen3:8b) + bge-m3 from the HF cache; API — fallback only.
+3. **Gates with measurements, not opinions**: a phase closes on a number (the way the spike closed step 0).
+4. **Annotation is the core of the product, not prep work**: every click by Vlad grows the golden dataset.
+5. **Vacancy freshness does not matter for annotation** — the material comes from the already-collected pool.
 
-## Карта компонентов: строим vs импортируем
+## Component map: build vs import
 
-| Компонент | Источник | Статус |
+| Component | Source | Status |
 |---|---|---|
-| Скрейп Indeed/LinkedIn | **форк `Vlislavn/JobSpy`** @ 89b0b3d, editable | ✅ подключён |
-| Arbeitsagentur-фетчер (v4 search + v3 details) | `sources/arbeitsagentur.py` | ✅ реализован (проверен на live API) |
-| Третичные фетчеры (Arbeitnow API, GermanTechJobs RSS) | `sources/tertiary.py`, строгий регион-фильтр | ✅ реализован |
-| Геокодер-allowlist (город/PLZ → расстояние) | `geo.py` (офлайн-таблица ~95 городов) | ✅ реализован |
-| LLM-клиент (retry/backoff, структурный JSON) | `llm.py` (паттерн zotero `integrations/llm.py`) | ✅ реализован |
-| Daemon/tick-оркестрация | `pipeline.py` (паттерн `_loop.py`+`_tick.py`) | ✅ реализован |
-| Страница фидбека (4 кнопки → SQLite) | `feedback_app.py` (паттерн VerdictPanel) | ✅ реализован |
-| Slate-рендер карточки | `slate.py` (стиль `render_job()`) | ✅ реализован |
-| Конфиг (profile/rubric.yaml + .env) | `config.py` + `config/profile.yaml` | ✅ реализован |
-| Разметка — веб-очередь `/annotate` (xlsx ретайрнут 2026-06-15) | `slate.annotation_batch` + `feedback_app` route | ✅ реализован |
-| CV-калибровка судьи (fold-SEM, N=3, baseline) | `calibration.py` (are/multi-run-variance) | ✅ реализован |
-| ML-gate (эмбеддинги + лог-рег) | **копия** classifier.py из zotero-summarizer, эмбеддер → bge-m3 | Could, по триггеру |
-| Import-лист из GitHub-ресёрча | см. [LITERATURE_REVIEW.md](LITERATURE_REVIEW.md) §3 | ✅ готов |
+| Indeed/LinkedIn scrape | **fork `Vlislavn/JobSpy`** @ 89b0b3d, editable | ✅ wired in |
+| Arbeitsagentur fetcher (v4 search + v3 details) | `sources/arbeitsagentur.py` | ✅ implemented (verified against live API) |
+| Tertiary fetchers (Arbeitnow API, GermanTechJobs RSS) | `sources/tertiary.py`, strict region filter | ✅ implemented |
+| Geocoder allowlist (city/PLZ → distance) | `geo.py` (offline table ~95 cities) | ✅ implemented |
+| LLM client (retry/backoff, structured JSON) | `llm.py` (zotero `integrations/llm.py` pattern) | ✅ implemented |
+| Daemon/tick orchestration | `pipeline.py` (`_loop.py`+`_tick.py` pattern) | ✅ implemented |
+| Feedback page (4 buttons → SQLite) | `feedback_app.py` (VerdictPanel pattern) | ✅ implemented |
+| Slate card render | `slate.py` (`render_job()` style) | ✅ implemented |
+| Config (profile/rubric.yaml + .env) | `config.py` + `config/profile.yaml` | ✅ implemented |
+| Annotation — web queue `/annotate` (xlsx retired 2026-06-15) | `slate.annotation_batch` + `feedback_app` route | ✅ implemented |
+| Judge CV calibration (fold-SEM, N=3, baseline) | `calibration.py` (are/multi-run-variance) | ✅ implemented |
+| ML gate (embeddings + log-reg) | **copy** of classifier.py from zotero-summarizer, embedder → bge-m3 | Could, on trigger |
+| Import list from the GitHub research | see [LITERATURE_REVIEW.md](LITERATURE_REVIEW.md) §3 | ✅ ready |
 
-**Import-лист v1 (итог GitHub-ресёрча, 2026-06-12):**
-1. **JobSpy PR [#347](https://github.com/speedyapply/JobSpy/pull/347)** — cherry-pick в форк: 13 строк, чинит мёртвый Glassdoor (CSRF-URL после Next.js-миграции). Опционально PR #366 (Xing-скрейпер, 227 строк) после smoke-теста.
-2. **[bundesAPI/jobsuche-api](https://github.com/bundesAPI/jobsuche-api)** — openapi.yaml как спецификация нашего AA-клиента (README рекомендует `/pc/v4/jobdetails`; наш v3 работает — проверить v4).
-3. **RapidFuzz** (MIT, активен) — fuzzy-дедуп по паттерну архивного JobFunnel `filters.py` (TF-IDF порог + таксономия дублей + seen-lockfile): библиотеку импортируем, паттерн копируем.
-4. **[ielab/llm-rankers](https://github.com/ielab/llm-rankers)** (Apache-2.0, pip) — setwise/pairwise-ранжирование слейта (см. Plan B судьи в Phase 2).
-5. **QuickApply** (MIT) + **VincenzoImp/job-search-tool** (MIT) — копия паттерна review/exclude/track-цикла и FastAPI+React-скелета для страницы фидбека.
-6. **Отклонены**: вся AIHawk-линейка (архив + AGPL), jobspy-api-обёртки, dedupe.io, ojd_daps_skills (англоцентричен), HN-тулинг. Upstream JobSpy не пушился с 2026-02 — форк остаётся авторитетным.
+**Import list v1 (result of the GitHub research, 2026-06-12):**
+1. **JobSpy PR [#347](https://github.com/speedyapply/JobSpy/pull/347)** — cherry-pick into the fork: 13 lines, fixes the dead Glassdoor (CSRF URL after the Next.js migration). Optionally PR #366 (Xing scraper, 227 lines) after a smoke test.
+2. **[bundesAPI/jobsuche-api](https://github.com/bundesAPI/jobsuche-api)** — openapi.yaml as the spec for our AA client (the README recommends `/pc/v4/jobdetails`; our v3 works — check v4).
+3. **RapidFuzz** (MIT, active) — fuzzy dedup following the archived JobFunnel `filters.py` pattern (TF-IDF threshold + duplicate taxonomy + seen-lockfile): we import the library, copy the pattern.
+4. **[ielab/llm-rankers](https://github.com/ielab/llm-rankers)** (Apache-2.0, pip) — setwise/pairwise ranking of the slate (see the judge's Plan B in Phase 2).
+5. **QuickApply** (MIT) + **VincenzoImp/job-search-tool** (MIT) — copy of the review/exclude/track-cycle pattern and the FastAPI+React skeleton for the feedback page.
+6. **Rejected**: the entire AIHawk line (archived + AGPL), jobspy-api wrappers, dedupe.io, ojd_daps_skills (Anglo-centric), HN tooling. Upstream JobSpy has not been pushed since 2026-02 — the fork remains authoritative.
 
-## Фазы
+## Phases
 
-### Phase 0 — Spike: что реально доступно ✅ ЗАКРЫТА 2026-06-12
+### Phase 0 — Spike: what is really available ✅ CLOSED 2026-06-12
 
-Вердикт go-with-changes. Indeed ✅ 213/100% описаний · **Arbeitsagentur API ✅ 314 (co-primary,
-найден спайком)** · LinkedIn ⚠️ (описания только fetch'ем) · Glassdoor/Google ❌ мертвы ·
-пересечение бордов 2.9% · скрытый немецкий 18.1% · LLM-стек локальный $0 · пул 731 уникальная
-вакансия за вечер. Полные цифры: [SPIKE_REPORT.md](../spike/SPIKE_REPORT.md).
+Verdict go-with-changes. Indeed ✅ 213/100% descriptions · **Arbeitsagentur API ✅ 314 (co-primary,
+found by the spike)** · LinkedIn ⚠️ (descriptions only via fetch) · Glassdoor/Google ❌ dead ·
+board overlap 2.9% · hidden German 18.1% · LLM stack local $0 · pool of 731 unique
+vacancies in one evening. Full numbers: [SPIKE_REPORT.md](../spike/SPIKE_REPORT.md).
 
-### Phase 0.5 — Ворота доверия (идёт)
+### Phase 0.5 — Trust gate (in progress)
 
-**Зачем:** одна ночь ≠ каждая ночь; LLM ещё не делал ни одной карточки.
+**Why:** one night ≠ every night; the LLM has not yet produced a single card.
 
-| Тест | Статус | Результат |
+| Test | Status | Result |
 |---|---|---|
-| LLM-пилот: 28 карточек через qwen (TBC-7) | ✅ **ПРОЙДЕН 2026-06-12** | JSON-valid **28/28 (100%)**, language_reality **19/20** (скрытый немецкий 5/5), ~7 с/карточка; 731 карточка = **1.55 ч**, ночь 50–110 = **6–14 мин**. Вердикт: **ship local, qwen3:8b** и для Normalizer (русский в выжимке 8/8 против 7/20 у 4b). Слабости: формат «2 строки» не соблюдается (чинится промптом), slop/temp-флаги не дискриминированы (в пилоте не было позитивов) |
-| Arbeitsagentur на полном объёме (TBC-9-часть) | ✅ **ПРОЙДЕН** | **298/298** HTTP 200 @0.93 req/s, ноль 403/429, p50 латентность 0.07 с; externeURL-строки (28) — все с полными описаниями. Production-ready |
-| LinkedIn fetch на масштабе (TBC-8) | ✅ **ПРОЙДЕН** | **300/300** описаний за 7.8 мин, ноль 429 (встроенный пейсинг jobspy ~0.64 req/s достаточен); 243 строки, 100% описаний, медиана 3 894 зн. Вердикт: **pipeline-grade nightly** (страховка: 5 с между запросами + стоп после 2 сбоев подряд — уже в `spike/scripts/a1_runner.py`) |
-| 3 ночи подряд крон-проб + замер churn (TBC-6) | осталось | 3/3 ночей без блоков; churn измерен |
-| Канарейки + min-row assertions (сигнатура «тихого Google») | Phase 3 код | юнит-тест на симулированном нуле |
+| LLM pilot: 28 cards via qwen (TBC-7) | ✅ **PASSED 2026-06-12** | JSON-valid **28/28 (100%)**, language_reality **19/20** (hidden German 5/5), ~7 s/card; 731 cards = **1.55 h**, a 50–110 night = **6–14 min**. Verdict: **ship local, qwen3:8b** also for the Normalizer (Russian in the summary 8/8 vs 7/20 for 4b). Weaknesses: the "2 lines" format is not respected (fixable via prompt), slop/temp flags not discriminated (no positives in the pilot) |
+| Arbeitsagentur at full volume (TBC-9 part) | ✅ **PASSED** | **298/298** HTTP 200 @0.93 req/s, zero 403/429, p50 latency 0.07 s; externeURL rows (28) — all with full descriptions. Production-ready |
+| LinkedIn fetch at scale (TBC-8) | ✅ **PASSED** | **300/300** descriptions in 7.8 min, zero 429 (jobspy's built-in pacing ~0.64 req/s is sufficient); 243 rows, 100% descriptions, median 3,894 chars. Verdict: **pipeline-grade nightly** (insurance: 5 s between requests + stop after 2 consecutive failures — already in `spike/scripts/a1_runner.py`) |
+| 3 nights in a row of cron probes + churn measurement (TBC-6) | remaining | 3/3 nights without blocks; churn measured |
+| Canaries + min-row assertions (signature of a "silent Google") | Phase 3 code | unit test on a simulated zero |
 
-### Phase 1 — Материал для разметки ✅ СОБРАН 2026-06-12
+### Phase 1 — Material for annotation ✅ COLLECTED 2026-06-12
 
-**Зачем:** быстро дать Владу 100 карточек — разметка не должна ждать пайплайна. Свежесть не важна.
+**Why:** quickly give Vlad 100 cards — annotation must not wait for the pipeline. Freshness does not matter.
 
-- ✅ Пул с полными описаниями: Indeed 213 + **LinkedIn 243** (добыты сегодня, 100% описаний) +
-  **Arbeitsagentur 298** (details добыты сегодня, 100%) = **754 вакансии annotation-grade**.
-- ✅ Артефакт: [`data/annotation/batch_001.xlsx`](../data/annotation/batch_001.xlsx) — ровно 100,
-  стратификация **LinkedIn 34 / Indeed 33 / AA 33** (квота LinkedIn — Влад считает их объявления
-  качественнее), с заведомыми негативами; лист-инструкция, dropdown'ы, формула признака 3,
-  счётчик прогресса; CSV-зеркало рядом.
-- **Остаток gate:** Влад открывает файл и подтверждает «размечать удобно» на первых 5.
+- ✅ Pool with full descriptions: Indeed 213 + **LinkedIn 243** (collected today, 100% descriptions) +
+  **Arbeitsagentur 298** (details collected today, 100%) = **754 annotation-grade vacancies**.
+- ✅ Artifact: [`data/annotation/batch_001.xlsx`](../data/annotation/batch_001.xlsx) — exactly 100,
+  stratification **LinkedIn 34 / Indeed 33 / AA 33** (the LinkedIn quota — Vlad considers their postings
+  higher quality), with known negatives; an instruction sheet, dropdowns, the feature-3 formula,
+  a progress counter; a CSV mirror alongside.
+- **Remaining gate:** Vlad opens the file and confirms "annotation is comfortable" on the first 5.
 
-### Phase 2 — Разметка + калибровка судьи
+### Phase 2 — Annotation + judge calibration
 
-**Зачем:** это создание ground truth — самой ценной части системы.
+**Why:** this is the creation of ground truth — the most valuable part of the system.
 
-- Влад: 100 × 3 признака (рекомендация 5 сессий × 20, ~30 мин каждая).
-- Параллельно: `profile/rubric.md` дописывается тегами/находками из разметки.
-- Калибровка judge: few-shot из крайних примеров (1 и 5); 5-fold CV.
-- **Gate:** agreement ≥75% по бинарному интенту И ≥ majority-baseline + 10 п.п., считая честно:
-  mean±SEM по фолдам, unjudgeable вне знаменателя, N=3 прогона судьи на стабильность вердикта.
-- **Plan B (если gate не взят за 3 итерации рубрики/few-shot):** литература однозначна — на
-  малых моделях сравнительный протокол надёжнее pointwise 1–5 (PRP/Setwise). Тогда: судья
-  внутри переходит на setwise-турниры (`llm-rankers` уже в import-листе), шкала 1–5 остаётся
-  только как отображение, якорённое метками; сбор меток — best-worst-четвёрками (тот же бюджет,
-  ×5 pairwise-ограничений). Это **решение Влада**, т.к. меняет UX разметки — см.
-  [LITERATURE_REVIEW.md](LITERATURE_REVIEW.md) §2 и §6.
+- Vlad: 100 × 3 features (recommended 5 sessions × 20, ~30 min each).
+- In parallel: `profile/rubric.md` gets extended with tags/findings from the annotation.
+- Judge calibration: few-shot from extreme examples (1 and 5); 5-fold CV.
+- **Gate:** agreement ≥75% on binary intent AND ≥ majority-baseline + 10 pp, counted honestly:
+  mean±SEM across folds, unjudgeable outside the denominator, N=3 judge runs for verdict stability.
+- **Plan B (if the gate is not cleared within 3 rubric/few-shot iterations):** the literature is unambiguous — on
+  small models a comparative protocol is more reliable than pointwise 1–5 (PRP/Setwise). Then: the judge
+  internally switches to setwise tournaments (`llm-rankers` is already in the import list), the 1–5 scale stays
+  only as a display, anchored to labels; label collection — best-worst quadruples (same budget,
+  ×5 pairwise constraints). This is **Vlad's decision**, since it changes the annotation UX — see
+  [LITERATURE_REVIEW.md](LITERATURE_REVIEW.md) §2 and §6.
 
-### Phase 3 — Daily-цикл MVP
+### Phase 3 — Daily-cycle MVP
 
-**Зачем:** замкнуть петлю «ночь → slate → клики → датасет».
+**Why:** close the loop "night → slate → clicks → dataset".
 
-- Ночной pipeline: cron 03:00 → Indeed+LinkedIn (`hours_old=24–48`, инкрементально) + AA
-  (фильтр по дате публикации) → дедуп (refnr/URL/company+title) → геокод-фильтр → добыча
-  описаний → Normalizer → фильтр по карточке → Judge → slate 8 exploit + 2 explore.
-- Поверхность: локальная FastAPI-страница (копия VerdictPanel), кнопки 💻🐀/😎/💅💸/applied ≤1 с.
-- Канарейки, лог воронки, FSM-статусы, идемпотентность.
-- **Инженерные дисциплины из SOTA-сравнения** (полный список — LITERATURE_REVIEW §5):
-  (1) **hard-before-soft**: декларативная лестница детерминированных чекеров (regex-немецкий с
-  exoneration-гардами «von Vorteil/is a plus», AA temp-флаг, геокод, remote) ДО любого LLM-вызова +
-  content-hash short-circuit для репостов; (2) **пин grader-tuple**: model + ollama digest +
-  rubric_version + fewshot_hash в каждой строке JudgeScore; (3) **классифицированный error
-  envelope**: закрытый enum причин отказа/фильтрации (filtered_geo / filtered_language_de /
-  llm_invalid_json / …) + lossless details — воронка становится диагностируемой; (4) единый
-  retry-враппер (Retry-After → capped backoff + jitter) для всех сетевых и LLM-вызовов;
-  (5) slop — density-smoothed 0–100 с тирами, не бинарный флаг (паттерн aislop).
-- **Gate:** 7 подряд утр slate готов к 08:00 без ручного вмешательства; каждый клик попадает в
-  golden dataset; канарейка ловит симулированный «тихий ноль».
+- Nightly pipeline: cron 03:00 → Indeed+LinkedIn (`hours_old=24–48`, incremental) + AA
+  (filter by posting date) → dedup (refnr/URL/company+title) → geocode filter → fetch
+  descriptions → Normalizer → card filter → Judge → slate 8 exploit + 2 explore.
+- Surface: a local FastAPI page (copy of VerdictPanel), buttons 💻🐀/😎/👸✨🧚/applied ≤1 s.
+- Canaries, funnel log, FSM statuses, idempotency.
+- **Engineering disciplines from the SOTA comparison** (full list — LITERATURE_REVIEW §5):
+  (1) **hard-before-soft**: a declarative ladder of deterministic checkers (regex German with
+  exoneration guards "von Vorteil/is a plus", AA temp flag, geocode, remote) BEFORE any LLM call +
+  content-hash short-circuit for reposts; (2) **pin the grader-tuple**: model + ollama digest +
+  rubric_version + fewshot_hash in every JudgeScore row; (3) **classified error
+  envelope**: a closed enum of rejection/filter reasons (filtered_geo / filtered_language_de /
+  llm_invalid_json / …) + lossless details — the funnel becomes diagnosable; (4) a single
+  retry wrapper (Retry-After → capped backoff + jitter) for all network and LLM calls;
+  (5) slop — density-smoothed 0–100 with tiers, not a binary flag (aislop pattern).
+- **Gate:** 7 mornings in a row the slate is ready by 08:00 without manual intervention; every click lands in
+  the golden dataset; the canary catches a simulated "silent zero".
 
-### Phase 4 — Should: качество сигнала
+### Phase 4 — Should: signal quality
 
-- Немецкие термины в матрице (TBC-1) — спасают тонкие магниты (животные 5.9%, public sector 5.5%).
-- Эвристический детектор скрытого немецкого (вторая линия; тестсет 27 примеров готов) — gate ≥25/27.
-- Slop-детектор текста вакансии (паттерн aislop: плотностный скоринг, не бинарный флаг).
-- Авто-integration score; еженедельный отчёт о вкусе + предложение новых тегов; Arbeitnow + GTJ фетчеры.
-- **Gate:** доля 😎+💅💸 в slate (скользящие 4 недели) не ниже бутстрап-базлайна; ноль вакансий
-  с реальным немецким в slate за 2 недели.
+- German terms in the matrix (TBC-1) — they rescue subtle magnets (animals 5.9%, public sector 5.5%).
+- Heuristic hidden-German detector (second line; test set of 27 examples ready) — gate ≥25/27.
+- Slop detector for the vacancy text (aislop pattern: density scoring, not a binary flag).
+- Auto integration score; weekly taste report + a suggestion of new tags; Arbeitnow + GTJ fetchers.
+- **Gate:** the share of 😎+👸✨🧚 in the slate (rolling 4 weeks) no lower than the bootstrap baseline; zero vacancies
+  with real German in the slate over 2 weeks.
 
-### Phase 5 — Could: по триггерам, не по плану
+### Phase 5 — Could: by trigger, not by plan
 
-| Фича | Триггер включения |
+| Feature | Inclusion trigger |
 |---|---|
-| ML-gate (bge-m3 + лог-рег из zotero-summarizer) | воронка стабильно >100 выживших/ночь |
-| Агент-дорасследователь (сайт компании, kununu) | ≥3 недели стабильного slate и Влад просит глубины по топам |
-| Kanban откликов | ≥10 applied накоплено |
-| StepStone v2 | анализ покрытия покажет пропуск эксклюзивов Indeed-краулером |
+| ML gate (bge-m3 + log-reg from zotero-summarizer) | funnel steadily >100 survivors/night |
+| Agentic re-investigator (company website, kununu) | ≥3 weeks of stable slate and Vlad asks for depth on the top picks |
+| Application Kanban | ≥10 applied accumulated |
+| StepStone v2 | coverage analysis shows a miss of Indeed-crawler exclusives |
 
-## Риски (топ-5, из критики и спайка)
+## Risks (top 5, from the critique and the spike)
 
-1. **Качество локального судьи против вкуса Влада** — главный продуктовый риск; ничего пока не
-   показало, что 4B/8B модель попадёт в 75%. Митигация: пилот до разметки, API-фоллбек, pairwise-план Б.
-2. **Баны на ночи 2–3** (Indeed Cloudflare, LinkedIn 429 на fetch-объёме) — митигация: 3-ночный
-   тест, AA как легально чистый co-primary, троттлинг.
-3. **Churn неизвестен** (5–15% — догадка) — размер K и окно ≤2 ч могут поплыть; митигация: замер.
-4. **Дрейф jobspy** (Glassdoor/Google сгнили под 1.1.82) — митигация: editable-форк под контролем,
-   spike-пробы как регрессионные канарейки.
-5. **Разметочная усталость** (300 кликов) — митигация: карточки вместо сырых текстов, сессии по 20,
-   автоподстановка признака 3, прогресс-бар.
+1. **Quality of the local judge against Vlad's taste** — the main product risk; nothing yet has
+   shown that a 4B/8B model will hit 75%. Mitigation: pilot before annotation, API fallback, pairwise Plan B.
+2. **Bans on nights 2–3** (Indeed Cloudflare, LinkedIn 429 at fetch volume) — mitigation: the 3-night
+   test, AA as a legally clean co-primary, throttling.
+3. **Churn unknown** (5–15% — a guess) — the size of K and the ≤2 h window may drift; mitigation: measure it.
+4. **jobspy drift** (Glassdoor/Google rotted under 1.1.82) — mitigation: an editable fork under control,
+   spike probes as regression canaries.
+5. **Annotation fatigue** (300 clicks) — mitigation: cards instead of raw texts, sessions of 20,
+   auto-fill of feature 3, a progress bar.
 
-## Открытые вопросы
+## Open questions
 
-Живут в [USE_CASE.md → Open Questions](../USE_CASE.md#open-questions): TBC-1 (немецкая матрица),
-TBC-2 (резюме), TBC-6 (churn), TBC-7 (пилот — закрывается сегодня), TBC-8 (LinkedIn — закрывается
-сегодня), TBC-9 (репосты/link-rot).
+They live in [USE_CASE.md → Open Questions](../USE_CASE.md#open-questions): TBC-1 (German matrix),
+TBC-2 (resume), TBC-6 (churn), TBC-7 (pilot — closing today), TBC-8 (LinkedIn — closing
+today), TBC-9 (reposts/link-rot).
 
-## История
+## History
 
-| Дата | Событие |
+| Date | Event |
 |---|---|
-| 2026-06-12 | Use case v0.1 → v0.2.1 (интервью → брейншторм → UX-гейт → адверсариальное ревью → spike 10 агентов → форк/ноутбук) |
-| 2026-06-12 | Roadmap v1; Phase 0 закрыта; Phase 0.5 и Phase 1 запущены (workflow: LinkedIn@scale, AA@volume, LLM-пилот, ресёрч ×4, сборка пакета разметки + lit review) |
-| 2026-06-13 | **Кодовая база v1 реализована** по контрактам `schabasch/INTERFACES.md`: все Must-модули (sources/jobspy+AA, geo, hardfilters, normalize, judge, slate, feedback_app, pipeline, cli) + Phase 2 (calibration CV-гейт) + Phase 1 (bootstrap-генератор). 51 тест зелёный (без сети/ollama). **Прогнан end-to-end на спайк-пуле:** import 754 → geo −122 → hard −269 (235 hidden-DE / 34 Zeitarbeit) → normalize (qwen3:8b, ~6 c/карточка, 0 JSON-ошибок) → judge (тег+оценка, 0 ошибок) → slate 8+2 → HTML → FastAPI serve + POST /feedback → golden.csv. AA-клиент проверен на live API (16 вакансий + details). German-детектор: 41/43 на spike-сете (gate ≥25). |
-| 2026-06-14 | **Import-over-build аудит + финализация:** (1) RapidFuzz fuzzy-дедуп реализован (`dedup.py`, 11 тестов, found 10 реальных кросс-борд дублей в спайк-пуле); (2) AA details мигрирован v3→v4 (live-probe: идентичный ответ); (3) Tertiary региональный фильтр ужесточён (dist is not None); (4) Планировщик macOS launchd (`deploy/com.schabasch.nightly.plist`, plutil-valid, ship-only); (5) `docs/IMPORT_AUDIT.md` — полная таблица conformance. 66 тестов зелёных. tick --tertiary валидирован live. Осталось: разметка 100 Владом → CV-гейт ≥75% → launchctl load → Phase-3 (7 ночей). |
+| 2026-06-12 | Use case v0.1 → v0.2.1 (interview → brainstorm → UX gate → adversarial review → spike of 10 agents → fork/notebook) |
+| 2026-06-12 | Roadmap v1; Phase 0 closed; Phase 0.5 and Phase 1 launched (workflow: LinkedIn@scale, AA@volume, LLM pilot, research ×4, assembly of the annotation package + lit review) |
+| 2026-06-13 | **Codebase v1 implemented** per the `schabasch/INTERFACES.md` contracts: all Must modules (sources/jobspy+AA, geo, hardfilters, normalize, judge, slate, feedback_app, pipeline, cli) + Phase 2 (calibration CV gate) + Phase 1 (bootstrap generator). 51 tests green (no network/ollama). **Run end-to-end on the spike pool:** import 754 → geo −122 → hard −269 (235 hidden-DE / 34 Zeitarbeit) → normalize (qwen3:8b, ~6 s/card, 0 JSON errors) → judge (tag+score, 0 errors) → slate 8+2 → HTML → FastAPI serve + POST /feedback → golden.csv. AA client verified against the live API (16 vacancies + details). German detector: 41/43 on the spike set (gate ≥25). |
+| 2026-06-14 | **Import-over-build audit + finalization:** (1) RapidFuzz fuzzy dedup implemented (`dedup.py`, 11 tests, found 10 real cross-board duplicates in the spike pool); (2) AA details migrated v3→v4 (live probe: identical response); (3) Tertiary regional filter tightened (dist is not None); (4) macOS launchd scheduler (`deploy/com.schabasch.nightly.plist`, plutil-valid, ship-only); (5) `docs/IMPORT_AUDIT.md` — full conformance table. 66 tests green. tick --tertiary validated live. Remaining: Vlad annotates 100 → CV gate ≥75% → launchctl load → Phase 3 (7 nights). |

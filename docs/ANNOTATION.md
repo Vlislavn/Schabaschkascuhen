@@ -20,15 +20,15 @@ the cold start — it's been retired; the rating queue replaces it.)
 
 | Button | Meaning | Records |
 |:------:|---------|:-------:|
-| 💻🐀 | not for me («офисная мышь») | score 2 |
+| 💻🐀 | not for me («офисная мышь», office mouse) | score 2 |
 | 😎 | yes, interesting | score 4 |
-| 💅💸 | dream job («шабашка») | score 5 |
+| 👸✨🧚 | dream job («шабашка», the dream/jackpot gig) | score 5 |
 | **applied** *(daily slate only)* | I applied to this | a flag (keeps your score) |
 
-The score chip on each card runs the same scale — **💻🐀 «офисная мышь» (1) → 💅💸 «шабашка» (5)** —
+The score chip on each card runs the same scale — **💻🐀 «офисная мышь» (1) → 👸✨🧚 «шабашка» (5)** —
 on a grey→gold gradient, so you read the verdict at a glance.
 
-What a **💅💸** looks like: a strong magnet (space / animals / military-security / big complex
+What a **👸✨🧚** looks like: a strong magnet (space / animals / military-security / big complex
 project / public sector) **+** Heidelberg/Frankfurt hybrid **+** English-speaking team **+** helps
 you integrate into Germany. A **💻🐀** is a killer: hidden German requirement, biotech, remote-only,
 a staffing agency (Zeitarbeit), or just a boring office-mouse role.
@@ -38,7 +38,7 @@ BI) — the **magnets** (`space` · `animals` · `military-security` · `complex
 `public-sector` · `new-domain`) are **aspirational pivot domains**, not your current skills; the best
 matches pair your analyst strengths with one of them. Magnets and **repellents** (`hidden-german` ·
 `biotech` · `slop-text` · `boring-role` · `remote-only` · `temp-agency`) show on the card as the
-"why" tag — the system assigns them; your 💻🐀/😎/💅💸 is the whole signal.
+"why" tag — the system assigns them; your 💻🐀/😎/👸✨🧚 is the whole signal.
 
 > 💡 Don't overthink it. ~10–20 seconds per job. Your gut reaction is exactly what it's learning.
 
@@ -57,24 +57,24 @@ python -m schabasch.cli serve
 http://localhost:8787/annotate     # the rating queue — start here to teach the system
 http://localhost:8787/              # today's slate
 http://localhost:8787/eval         # validation: how well matches track YOUR ratings (live)
-http://localhost:8787/gaps         # recurring skill gaps across jobs you WANT (😎/💅💸/applied)
+http://localhost:8787/gaps         # recurring skill gaps across jobs you WANT (😎/👸✨🧚/applied)
 http://localhost:8787/funnel       # pipeline funnel (scrape→…→slate counts, scraper health)
 ```
 
-**3. What's on each card:** the **💻🐀→💅💸 score chip** (gradient by 1–5) · title · company · city ·
-work mode · the posting date (*опубл. N дн.* — or *найдено N дн.* when the board gives no posting
-date) · a collapsible **🎯 Навыки {%}** breakdown (✓ have / ◐ partial / ✗ missing per requirement).
+**3. What's on each card:** the **💻🐀→👸✨🧚 score chip** (gradient by 1–5) · title · company · city ·
+work mode · the posting date (*published N days ago* — or *found N days ago* when the board gives no posting
+date) · a collapsible **🎯 Skills {%}** breakdown (✓ have / ◐ partial / ✗ missing per requirement).
 A red **⛔** banner means you don't meet a hard requirement (e.g. a PhD you don't have) — the one
-"stop" signal. Top picks also show a **🔎 verified** line: company size, salary, "английская команда",
-and a **deterministic** listing check — "открыта ✓" / "⚠ вакансия закрыта" (confirmed 404) /
-"ℹ листинг не проверён" (couldn't check — never a false "closed").
+"stop" signal. Top picks also show a **🔎 verified** line: company size, salary, "English-speaking team",
+and a **deterministic** listing check — "open ✓" / "⚠ listing closed" (confirmed 404) /
+"ℹ listing not checked" (couldn't check — never a false "closed").
 
 **4. Click one button per card.** The card dims and shows a ✓; a counter at the top tracks your
-progress (e.g. *Отмечено 7/30*). Misclicked? Click **↶ изменить** to re-enable the card and pick
+progress (e.g. *Marked 7/30*). Misclicked? Click **↶ change** to re-enable the card and pick
 again. On the daily slate, rated cards won't come back tomorrow.
 
 - **applied** (daily slate) is a flag *on top of* your score — clicking it doesn't invent a 5. If
-  you want to record how good it was, click 😎/💅💸 as well.
+  you want to record how good it was, click 😎/👸✨🧚 as well.
 - Fewer than 10 cards on the slate is normal — the system never pads the list with junk.
 - If a scraper died overnight, a red banner appears at the top so you know the list might be thin.
 - Press `Ctrl-C` in the terminal to stop the page when you're done.
@@ -84,7 +84,7 @@ again. On the daily slate, rated cards won't come back tomorrow.
 ## What happens after you click
 
 - Your labels go into a private `label` table (your "golden dataset") — nothing leaves the Mac.
-- The **judge** (the LLM that scores jobs) learns from your 💅💸 (dream) and 💻🐀 (not-for-me) examples.
+- The **judge** (the LLM that scores jobs) learns from your 👸✨🧚 (dream) and 💻🐀 (not-for-me) examples.
 - Once you've given **~30** labels, a small **ranking model** starts learning your taste and pushes
   the bottom-of-the-barrel jobs out before they ever waste a slot. Around **50–100** the judge gets
   a calibration check (`schabasch cv`).
@@ -114,13 +114,13 @@ again. On the daily slate, rated cards won't come back tomorrow.
 **How many should I rate?** The more the better. ~30 is where the ranking model kicks in; ~50–100
 gives a solid start. Do it in small batches from the `/annotate` queue.
 
-**What if I'm unsure?** Pick 💻🐀 if it's clearly not for you, 😎 if you'd be curious, 💅💸 only for a
+**What if I'm unsure?** Pick 💻🐀 if it's clearly not for you, 😎 if you'd be curious, 👸✨🧚 only for a
 real dream job. When torn between 😎 and 💻🐀, lean 💻🐀 — the system errs toward fewer, better jobs.
 
 **A job is in a magnet domain but through a staffing agency — what then?** 💻🐀. A repellent
 (temp-agency) beats a magnet.
 
-**Can I change a rating I already gave?** Yes — click **↶ изменить** on the card and pick a different
+**Can I change a rating I already gave?** Yes — click **↶ change** on the card and pick a different
 button, or just rate it again next time it appears.
 
 **Is anything uploaded?** No. Everything is local: the database and the LLM.
