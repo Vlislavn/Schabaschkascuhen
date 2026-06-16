@@ -5,6 +5,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Per-feature ablation harness — `eval/feature_ablation.py` (2026-06-16)
+- New **model-free** ablation (reads cached `feature_json` vs the 50 real labels; no LLM/bge-m3/35B; ~1.3s):
+  MODE 1 standalone ranking power, MODE 2 leave-one-out of the production fit blend, MODE 3 add-one-in
+  5-fold **held-out (same-subset Δ)** — the earns-its-place test. Bootstrap 95% CIs. Run:
+  `python -m eval.feature_ablation --real-labels`. Documented in `docs/MATCHING_SOTA.md`.
+- **First run (n=49):** production fit correctly relies on both `hyre` (Δ+0.084) and `sparse` (Δ+0.059) —
+  no dead weight; **almost nothing adds beyond fit** held-out; the LLM agent booleans
+  (`requirements_verified` −0.03, `company_known` −0.09) *hurt* as ranking features (correctly used as
+  gates/display, not matcher inputs). Cautionary tale: `title_log_len` tops standalone (0.775) but hurts
+  in-blend (−0.043) — standalone power ≠ earns-its-place. n=49 → CIs wide; |Δ|<~0.05 is noise.
+- No production change (measurement tool). 36 touched-suite tests green.
+
 ### Frontier eval — LLM-canonical-JD → embed (decision record; NOT shipped) (2026-06-16)
 - New `eval/canonical_jd_experiment.py`: tests the purest "LLM-extracts-for-ML" form — LLM-extract a
   canonical JD skills/requirements list → embed (bge-m3) → CV-cosine signal — vs the raw-JD baseline +

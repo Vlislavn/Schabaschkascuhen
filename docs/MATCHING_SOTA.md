@@ -78,6 +78,20 @@ the loaded model) + `fit_weights {hyre:0.7, sparse:0.3}` + `sparse_norm 0.45` (f
 no set-relative min-max). Card: `sota-pattern-index/.../bge-m3/native-hybrid-fusion.md`. Lesson: a
 *model-deferred* "no signal helps" (the earlier `hybrid_probe.py`) is NOT a negative — run the model first.
 
+## Per-feature ablation — does each feature earn its place? (`eval/feature_ablation.py`, 2026-06-16)
+
+**Run:** `python -m eval.feature_ablation --real-labels`  (model-free — reads cached `vacancy_feature.feature_json`
+vs the `label` table; no LLM/bge-m3/35B; ~1.3s). Optional `--boot=N` (bootstrap resamples, default 500).
+
+Three modes, all with bootstrap 95% CIs over the real labels:
+- **MODE 1 — standalone ranking power:** each feature alone as a ranker (oriented by spearman sign) → pairwise/ndcg/spearman + CI. "Has *any* label signal?"
+- **MODE 2 — leave-one-out of the production fit blend** (`{hyre:0.7, sparse:0.3}`): drop each component, recompute `features.fit_from_feature`, report Δpairwise → what the matcher *relies on*.
+- **MODE 3 — add-one-in, 5-fold HELD-OUT (same-subset Δ):** blend `α·fit + (1−α)·feature`, α picked on train folds, eval on the held-out fold, baseline computed on the *same* id-subset/folds → does the feature ADD orthogonal signal? **This is the earns-its-place test.**
+
+**Decision rule:** a feature earns a place in the matcher only if its **MODE-3 held-out Δ > 0**. Standalone power (MODE 1) ≠ earns-its-place — e.g. `title_log_len` *tops* MODE 1 (0.775) yet **hurts in-blend (−0.043)**, a textbook small-n spurious correlation.
+
+**First run (n=49, 2026-06-16):** MODE 2 → production correctly leans on both `hyre` (Δ+0.084) and `sparse` (Δ+0.059) — no dead weight. MODE 3 → **almost nothing adds beyond fit**; the LLM agent booleans (`requirements_verified` −0.03, `company_known` −0.09) *hurt* as ranking features (they belong as gates/display, where they live). The two nominal "ADDS" (`is_remote_hint` +0.074, `has_structure` +0.059) are binary metadata on ~8-item held-out folds → small-n-fragile, not ship signals. **Binding caveat: n=49 → CIs wide (random ≈0.61 [0.44,0.80]); |Δ|<~0.05 is noise.** Model-based permutation importance on the LightGBM gate is the richer ablation but is deferred until ≥75–100 labels (the gate is cold-start at n=50).
+
 ## Adoption plan (ROI order, all local/$0)
 
 > **✅ Tier 1 IMPLEMENTED & live-verified (2026-06-15).** `features.rerank_scored` now also computes
