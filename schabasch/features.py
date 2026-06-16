@@ -248,7 +248,7 @@ def _llm_coverage(con, *, cache_key: str, jd_title: str, jd_desc: str, cv_text: 
     return cov, miss, reqs
 
 
-# bge-m3 sparse-lexical scores (compute_score['sparse']) for Alina's CV↔JD pairs sit ≈ [0.03, 0.45];
+# bge-m3 sparse-lexical scores (compute_score['sparse']) for the user's CV↔JD pairs sit ≈ [0.03, 0.45];
 # divide by this to map ≈[0,1] (clamped) so the 'sparse' blend weight is comparable to HyRE's [0,1].
 # Calibrated on the labeled set; the hybrid win is robust to the exact divisor (eval/hybrid_measure).
 _SPARSE_NORM_SCALE = 0.45
@@ -260,7 +260,7 @@ def _blend_fit(*, xenc_full: float | None, llm_cov: float | None, fit_hyre: floa
     cross-encoder relevance (xenc_full) and LLM per-requirement coverage (llm_cov), all in [0,1].
     Renormalized over the signals actually present (graceful when a vacancy lacks one).
 
-    RE-TUNED on Alina's 37 REAL labels. HyRE is the best single signal (0.803); on 2026-06-15 PM the
+    RE-TUNED on the user's 37 REAL labels. HyRE is the best single signal (0.803); on 2026-06-15 PM the
     bge-m3 SPARSE hybrid (the deferred SOTA upgrade — bge-m3 is a native dense+sparse+ColBERT model)
     was measured and ADDED: `0.7·hyre + 0.3·sparse_norm` beats HyRE-only on ALL THREE metrics
     (pairwise 0.803→0.814, ndcg@10 0.539→0.584, spearman 0.408→0.427) AND adds a DETERMINISTIC signal
@@ -627,7 +627,7 @@ def extract_features(cfg: dict, con, *, limit: int | None = None) -> dict[str, i
                 cand_sparse,
             )
             # Real gate signals (were hardcoded to neutral constants → location/language never
-            # influenced the score, which Alina's hybrid/Heidelberg-Frankfurt requirement needs).
+            # influenced the score, which the user's hybrid/Heidelberg-Frankfurt requirement needs).
             _in_radius, _dist_km = _geo.geo_check(row["city"], cfg)
             geo_norm = 0.5 if _dist_km is None else min(1.0, float(_dist_km) / 100.0)
             gates = {
@@ -822,7 +822,7 @@ def rerank_scored(cfg: dict, con, *, top_k: int | None = None) -> dict:
 
         # ELIGIBILITY gate (hard qualifications: education/PhD-position/credentials/language).
         # Separate from skill fit — catches "great skills but not allowed to apply" (e.g. a PhD
-        # role needing a Master's she lacks). Down-rank via elig_score, never drop.
+        # role needing a Master's the user lacks). Down-rank via elig_score, never drop.
         if elig_on and qwen is not None:
             req = _elig.extract_requirements(con, content_hash=ch, jd_text=jd_text, client=qwen)
             eg, en, sev = _elig.eligibility_gate(req, cand_quals, floor=elig_floor, mid=elig_mid,

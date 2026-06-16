@@ -1,6 +1,6 @@
 """Hard-qualification / eligibility gate — the layer that catches "great skill match but the
 candidate is NOT ELIGIBLE" (a PhD position needing a Master's offered to a Bachelor-holder; a
-"C1 German required" role; a clearance she lacks). This is SEPARATE from skill/semantic fit.
+"C1 German required" role; a clearance the user lacks). This is SEPARATE from skill/semantic fit.
 
 Design (grounded in the local SOTA refs):
 - ConFit-v2 `src/schema/job.py` splits RequiredQualification {minimum_degree_level, experience,
@@ -92,7 +92,7 @@ _SOFT_NEAR = re.compile(
 
 # "Master Data", "Scrum Master", "master plan/agreement/thesis/craftsman" etc. are NOT an academic
 # degree — qwen routinely mis-reads these as education_required="master" (the literal Merz-439 bug:
-# the title "Business Process Owner – Master Data" → phantom master-degree gate on her #1 job).
+# the title "Business Process Owner – Master Data" → phantom master-degree gate on the user's #1 job).
 # A "master" mention is degree-context UNLESS it is one of these non-degree noun phrases.
 _MASTER_NONDEGREE = re.compile(
     r"(scrum[\s-]+master|product[\s-]+master|master[\s-]+(data|plan|planning|agreement|"
@@ -242,11 +242,11 @@ def eligibility_gate(req: dict, cand: dict, *, floor: float = 0.35, mid: float =
     real STOP → red ⛔; SOFT (a prose degree minimum) is a muted amber note that must NOT sink a
     strong-fit job. The worst single hard miss governs (min of sub-factors). DOWN-RANK, never drop.
 
-    HIGH-FIT LIFT (her literal SCHOTT ask — "много мэтча, требование по master degree я бы проигнорил"):
+    HIGH-FIT LIFT (the user's literal SCHOTT ask — "много мэтча, требование по master degree я бы проигнорил"):
     when fit_score ≥ soft_lift_threshold the SOFT degree penalty is lifted to 1.0 (note still shown,
     no demotion). Structural blockers are NEVER lifted — a PhD position stays a hard no regardless.
 
-    CONSERVATIVE BY DESIGN. Empirically qwen mislabels ordinary SKILLS and things-she-has
+    CONSERVATIVE BY DESIGN. Empirically qwen mislabels ordinary SKILLS and things-the user-has
     ("Python proficiency", "Fluent English", "EU work permit") as mandatory_credentials, which
     floored ~all jobs. So the gate acts ONLY on a few HIGH-PRECISION hard blockers and never on
     credentials/skills/years — skills are handled by the cross-encoder fit signal, not here.
@@ -265,9 +265,9 @@ def eligibility_gate(req: dict, cand: dict, *, floor: float = 0.35, mid: float =
 
     # 2) explicit HARD degree minimum from prose (noisier extraction) → SOFT down-rank, never floor.
     #    A 1-step gap (Bachelor missing a Master) is SOFT and lifted to 1.0 for a strong-fit job
-    #    (her SCHOTT ask). A 2+-step gap (Bachelor missing a PhD) is a REAL blocker → STRUCTURAL and
+    #    (the user's SCHOTT ask). A 2+-step gap (Bachelor missing a PhD) is a REAL blocker → STRUCTURAL and
     #    NEVER lifted (fit≈0.64 for ~every JD here, so without this guard the lift would always fire
-    #    and could rescue a genuinely PhD-required role she cannot qualify for).
+    #    and could rescue a genuinely PhD-required role the user cannot qualify for).
     req_edu = req.get("education_required")
     if req_edu and req.get("education_is_hard"):
         need = EDU_ORDINAL.get(str(req_edu).lower())
@@ -278,10 +278,10 @@ def eligibility_gate(req: dict, cand: dict, *, floor: float = 0.35, mid: float =
             else:
                 soft_mult = mid
                 if fit_score is not None and float(fit_score) >= soft_lift_threshold:
-                    soft_mult = 1.0   # high-fit lift: don't sink a 1-step job she'd apply to (SCHOTT)
+                    soft_mult = 1.0   # high-fit lift: don't sink a 1-step job the user would apply to (SCHOTT)
                 factors.append((soft_mult, reason, "soft"))
 
-    # 3) hard NON-English language clearly above her KNOWN level (English never gates — she's C1).
+    # 3) hard NON-English language clearly above the user's KNOWN level (English never gates — the user is C1).
     for L in (req.get("language_required") or []):
         if not isinstance(L, dict) or not L.get("is_hard"):
             continue

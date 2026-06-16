@@ -1,5 +1,5 @@
 """Compute ESCO discrete-skill coverage for the gold jobs, persist to feature_json['_extra'],
-and evaluate on the gold set. Validates that ESCO coverage discriminates her-fit from adjacent."""
+and evaluate on the gold set. Validates that ESCO coverage discriminates fit from adjacent roles."""
 from __future__ import annotations
 
 import json

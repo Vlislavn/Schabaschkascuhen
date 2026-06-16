@@ -50,7 +50,7 @@ def _enrichments(con) -> dict[int, dict]:
 
 
 def _user_notes(con) -> dict[int, str]:
-    """{vacancy_id: her saved free-text note} from the slate-source labels, so a typed note
+    """{vacancy_id: the user's saved free-text note} from the slate-source labels, so a typed note
     re-renders in the textarea on reload (insert_label upserts on (vacancy_id, source))."""
     rows = con.execute(
         "SELECT vacancy_id, why_freetext FROM label "
@@ -90,7 +90,7 @@ def _load_scored(con, rubric_version: str | None = None, *, max_age_days: int | 
         mid_sql += " WHERE rubric_version = ?"
         params.append(rubric_version)
     mid_sql += " GROUP BY vacancy_id"
-    # status IN (SCORED, SLATED): a vacancy slated but never labelled (Alina skipped that
+    # status IN (SCORED, SLATED): a vacancy slated but never labelled (the user skipped that
     # morning) re-enters the next slate on equal footing — USE_CASE 9a.
     where = "v.status IN (?, ?)"
     wparams: list = [Status.SCORED.value, Status.SLATED.value]
@@ -112,7 +112,7 @@ def _load_scored(con, rubric_version: str | None = None, *, max_age_days: int | 
     ).fetchall()
     inv_map = _investigations(con)        # deeper company review, attached per card
     enr_map = _enrichments(con)           # Zotero-style snippets + pros/cons + deep company
-    notes = _user_notes(con)              # her saved free-text per vacancy (re-render on reload)
+    notes = _user_notes(con)              # the user's saved free-text per vacancy (re-render on reload)
     items: list[dict] = []
     for r in rows:
         vid = int(r["id"])
@@ -257,7 +257,7 @@ def build_slate(cfg: dict, con, slate_date: str) -> list[dict]:
         db.log_funnel(con, "slate_fit_missing", n_nofit,
                       detail=f"{n_nofit}/{len(items)} candidates lack fit_score — run rerank/tick first")
     # De-conflate qualification from preference (DualOptimization_jobrec — `s_final = s_pref + λ·s_qual`,
-    # the card's #1 mistake is letting the 1–5 magnet judge swamp fit). RE-DERIVED on Alina's 37 REAL
+    # the card's #1 mistake is letting the 1–5 magnet judge swamp fit). RE-DERIVED on the user's 37 REAL
     # labels 2026-06-15: the old judge-LED formula was ~random (pairwise 0.564). Now FIT LEADS —
     #   effective = fit_score · (1 + β·judge_norm) · elig_score   (β = slate.judge_blend_beta).
     # On real labels β=0 measures best (the magnet judge is near-random as a magnitude term); the
@@ -269,9 +269,9 @@ def build_slate(cfg: dict, con, slate_date: str) -> list[dict]:
         fit = x.get("fit_score", 0.0)
         judge_norm = max(0.0, (float(x["score"]) - 1.0) / 4.0) if x.get("score") is not None else 0.0
         elig = x.get("elig_score", 1.0)
-        # role-kind soft down-rank (W1): hands-on-engineer / intern roles she repeatedly rejected get
+        # role-kind soft down-rank (W1): hands-on-engineer / intern roles the user repeatedly rejected get
         # a config-driven multiplier (<1) so they sink out of the exploit slots — never a hard drop
-        # (still explore-eligible; one engineer role she rated 4). Measured on real labels (W4).
+        # (still explore-eligible; one engineer role the user rated 4). Measured on real labels (W4).
         rk = _rk.multiplier(_rk.classify(x.get("title"), x.get("summary")), cfg)
         return fit * (1.0 + beta * judge_norm) * elig * rk
 
@@ -314,7 +314,7 @@ def build_slate(cfg: dict, con, slate_date: str) -> list[dict]:
         company_count[ckey] = company_count.get(ckey, 0) + 1
 
     # explore = "test-interest" slots. Prefer FAR-but-in-Germany jobs here (a strong-magnet München
-    # role she'd consider), then fill with random others — deterministic per slate_date.
+    # role the user would consider), then fill with random others — deterministic per slate_date.
     remaining = [it for it in items if it["vacancy_id"] not in chosen_ids]
     rng = random.Random(slate_date)
     rng.shuffle(remaining)
@@ -350,7 +350,7 @@ def build_slate(cfg: dict, con, slate_date: str) -> list[dict]:
 
 
 # Von Restorff: exactly TWO strong-emphasis channels — the blue score and the red ⛔ STOP
-# alert (hard eligibility miss, the one thing that should halt her). Everything else that used
+# alert (hard eligibility miss, the one thing that should halt the user). Everything else that used
 # to compete for attention (green "verified", teal why-badge, purple explore border, the fit-gap
 # warning) is demoted to a quiet neutral gray so the ⛔ actually stands out.
 _CSS = """
@@ -882,7 +882,7 @@ class="meta2"> · {escape(str(e.get('work_mode') or ''))}{posted_html}{far_html}
 def _chip_row(lang: str = DEFAULT_LANG) -> str:
     """WS3 filter chips (client-side, no endpoint): time window + relevance order + far toggle.
     Default-on chips reflect _JS._F defaults (all time, promising order, far shown) — nothing is
-    hidden until she narrows, so a curated slate is never silently truncated (Aesthetic-Usability).
+    hidden until the user narrows, so a curated slate is never silently truncated (Aesthetic-Usability).
     """
     # Chips are <button type=button> (not <span>) so they are keyboard-focusable + Enter/Space work
     # natively (WCAG 2.1.1; Jakob — native semantics). .chip CSS overrides the default button look.
@@ -1026,7 +1026,7 @@ def render_annotate_html(items: list[dict], slate_date: str, *, total_pending: i
 
 
 def render_eval_html(report: dict, lang: str = DEFAULT_LANG) -> str:
-    """Validation dashboard: matcher ranking-quality vs Alina's REAL labels (schabasch.validation).
+    """Validation dashboard: matcher ranking-quality vs the user's REAL labels (schabasch.validation).
     Von Restorff: one headline (the clean fit_score). Goal-Gradient: a "rate more in /annotate"
     banner until enough labels accrue. No inputs — the page only reads (Tesler)."""
     nav = (f'<p class="nav muted"><a href="/?lang={lang}">{t(lang, "nav.slate")}</a>'
@@ -1126,7 +1126,7 @@ def render_tasks_html(tasks: list[dict], summary: dict, lang: str = DEFAULT_LANG
 
 
 def render_gaps_html(report: dict, lang: str = DEFAULT_LANG) -> str:
-    """Skill-gap dashboard (schabasch.gaps): across the jobs Alina WANTS (😎/👸✨🧚/applied), which
+    """Skill-gap dashboard (schabasch.gaps): across the jobs the user WANTS (😎/👸✨🧚/applied), which
     requirements recur as ✗ missing / ◐ partial. A 'not on my CV → add it or learn it' list."""
     nav = (f'<p class="nav muted"><a href="/?lang={lang}">{t(lang, "nav.slate")}</a>'
            f'<a href="/annotate?lang={lang}">{t(lang, "nav.annotate")}</a>'

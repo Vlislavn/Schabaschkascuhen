@@ -2,7 +2,7 @@
 and the live web validation page (schabasch/validation.py → /eval).
 
 A scoring method is GOOD iff it ranks high-gold jobs above low-gold ones. `gold` is always an
-explicit {vacancy_id: relevance} dict (synthetic GOLD for the CLI dev-floor; Alina's real
+explicit {vacancy_id: relevance} dict (synthetic GOLD for the CLI dev-floor; the user's real
 score_1_5 labels for the UI). scipy is optional — `spearman` degrades to 0.0 if it's absent.
 """
 from __future__ import annotations

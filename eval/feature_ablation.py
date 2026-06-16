@@ -1,4 +1,4 @@
-"""Per-feature ablation over stored `feature_json` vs Alina's real labels — MODEL-FREE.
+"""Per-feature ablation over stored `feature_json` vs the user's real labels — MODEL-FREE.
 
 Run:  python -m eval.feature_ablation [--real-labels] [--boot=500]
 

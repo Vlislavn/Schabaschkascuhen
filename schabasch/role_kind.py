@@ -1,15 +1,15 @@
 """Deterministic role-kind classifier — drives the engineer/junior down-rank + card flags (W1).
 
-Alina's review comments are emphatic and repeated: «никаких инженеров / не хочу руками, хочу
+The user's review comments are emphatic and repeated: «никаких инженеров / не хочу руками, хочу
 головой» (≥4 jobs) and intern/working-student rejections. This classifier turns the role TITLE
 (+summary) into a coarse kind so the slate can softly down-rank hands-on-engineer and junior roles
-and flag them — recall-first (never a hard drop: she rated one engineer role 4, «правда прикольный,
+and flag them — recall-first (never a hard drop: the user rated one engineer role 4, «правда прикольный,
 но инженер»). It's title-keyword based (generalizable, no per-vacancy hardcode); the multiplier is
 config-driven and MEASURED on real labels before being trusted (eval/experiment.py).
 
-Kinds: "lead" (principal/lead/head — she likes these → no penalty), "junior" (intern/working-
+Kinds: "lead" (principal/lead/head — positive signal → no penalty), "junior" (intern/working-
 student/diploma), "hands_on_engineer" (engineer/developer NOT also lead), "" (neutral / analyst /
-manager / owner — the roles that fit her).
+manager / owner — roles that fit the profile).
 """
 from __future__ import annotations
 
@@ -44,7 +44,7 @@ def classify(title: str | None, summary: str | None = None) -> str:
     if _JUNIOR_RE.search(t):
         return "junior"           # intern/working-student floor wins (even 'Lead Intern' is junior)
     if _ENGINEER_RE.search(t):
-        # A lead/principal engineering ROLE is the head-not-hands work she likes → not a repellent.
+        # A lead/principal engineering ROLE is the head-not-hands work the user likes → not a repellent.
         return "lead" if is_lead else "hands_on_engineer"
     if is_lead:
         return "lead"

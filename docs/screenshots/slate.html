@@ -97,7 +97,7 @@ details.legend .leg span{white-space:nowrap}
 <body>
 <div class="topbar"><span class="langsw"><b>English</b> · <a href="?lang=ru">Русский</a></span></div>
 <h1>Slate · 2026-06-16</h1>
-<p class="nav muted"><a href="/annotate?lang=en">annotate more ↗</a><a href="/eval?lang=en">validation ↗</a><a href="/gaps?lang=en">gaps ↗</a><a href="/tasks?lang=en">tasks ↗</a><a href="/funnel?lang=en">funnel ↗</a> <button id="fetch-btn" onclick="triggerFetch()" title="Collect fresh jobs (takes a few minutes)">🔄 fetch new jobs</button><span id="fetch-status" class="muted"></span></p><p class="progress" id="progress" data-total="3">Marked 0/3</p><details class="legend"><summary>❔ legend</summary><div class="leg"><span>💻🐀 office mouse (1) → 👸✨🧚 шабашка (5) — score</span><span>⛔ you don&#x27;t meet a requirement</span><span>⚠ risk / skill gap</span><span>🎯 skill coverage</span><span>📄 deep dive</span><span>🛠 hands-on engineer — not for you</span><span>🎓 intern / junior</span><span>📍 far (but in Germany)</span><span>🇩🇪 company rooted in Germany</span><span>🔎 company check</span><span>🧭 interest check (explore)</span></div></details><div class="chips"><span class="lbl">⏱</span><button type="button" class="chip" data-group="time" onclick="chip('time',1,this)">today</button><button type="button" class="chip" data-group="time" onclick="chip('time',3,this)">3 days</button><button type="button" class="chip" data-group="time" onclick="chip('time',7,this)">week</button><button type="button" class="chip on" data-group="time" onclick="chip('time',1000000000,this)">all</button><span class="lbl">·</span><button type="button" class="chip on" data-group="order" onclick="chip('order','fit',this)">🎯 promising</button><button type="button" class="chip" data-group="order" onclick="chip('order','fresh',this)">🆕 fresh</button><span class="lbl">·</span><button type="button" class="chip on" data-group="far" onclick="chip('far',0,this)">📍 far</button><span class="lbl">·</span><button type="button" class="chip" data-group="weak" onclick="chip('weak',0,this)">🙈 hide weak</button></div>
+<p class="nav muted"><a href="/annotate?lang=en">annotate more ↗</a><a href="/eval?lang=en">validation ↗</a><a href="/gaps?lang=en">gaps ↗</a><a href="/tasks?lang=en">tasks ↗</a><a href="/funnel?lang=en">funnel ↗</a> <button id="fetch-btn" onclick="triggerFetch()" title="Collect fresh jobs (takes a few minutes)">🔄 fetch new jobs</button><span id="fetch-status" class="muted"></span></p><p class="progress" id="progress" data-total="2">Marked 0/2</p><details class="legend"><summary>❔ legend</summary><div class="leg"><span>💻🐀 office mouse (1) → 👸✨🧚 шабашка (5) — score</span><span>⛔ you don&#x27;t meet a requirement</span><span>⚠ risk / skill gap</span><span>🎯 skill coverage</span><span>📄 deep dive</span><span>🛠 hands-on engineer — not for you</span><span>🎓 intern / junior</span><span>📍 far (but in Germany)</span><span>🇩🇪 company rooted in Germany</span><span>🔎 company check</span><span>🧭 interest check (explore)</span></div></details><div class="chips"><span class="lbl">⏱</span><button type="button" class="chip" data-group="time" onclick="chip('time',1,this)">today</button><button type="button" class="chip" data-group="time" onclick="chip('time',3,this)">3 days</button><button type="button" class="chip" data-group="time" onclick="chip('time',7,this)">week</button><button type="button" class="chip on" data-group="time" onclick="chip('time',1000000000,this)">all</button><span class="lbl">·</span><button type="button" class="chip on" data-group="order" onclick="chip('order','fit',this)">🎯 promising</button><button type="button" class="chip" data-group="order" onclick="chip('order','fresh',this)">🆕 fresh</button><span class="lbl">·</span><button type="button" class="chip on" data-group="far" onclick="chip('far',0,this)">📍 far</button><span class="lbl">·</span><button type="button" class="chip" data-group="weak" onclick="chip('weak',0,this)">🙈 hide weak</button></div>
 <div id="cards">
 <div class="card" id="card-1" data-days="4" data-score="5" data-fit="0.8200" data-far="0">
   <div class="row">
@@ -125,34 +125,6 @@ details.legend .leg span{white-space:nowrap}
   </div>
   <button type="button" class="note-toggle" id="notebtn-1" onclick="toggleNote(1)">+ note</button>
   <textarea class="note" id="note-1" rows="2" aria-label="Note about the job" placeholder="why yes/no, what matters… (teaches the judge)" style="display:none"></textarea>
-</div>
-
-<div class="card" id="card-2" data-days="4" data-score="4" data-fit="0.6600" data-far="0">
-  <div class="row">
-    <div>
-      <p class="title">Process Owner — Public Sector Digitalization </p>
-      <p class="meta">Demo Verwaltung AG · Frankfurt am Main<span class="meta2"> · hybrid · <span class="posted">posted 4d ago</span></span></p>
-    </div>
-    <div class="score" role="img" aria-label="score 4 of 5" title="score 4/5: 4/5" style="background:linear-gradient(135deg,#e98b3a,#f6c463)">😎</div>
-  </div>
-  
-  <div><span class="why">public-sector</span></div>
-  <div class="summary">Own target operating models for a state agency&#x27;s case-management rollout.</div>
-  <details class="skills"><summary>🎯 Skills 70% · 2 ✓ · 0 ◐ · 1 ✗</summary><ul><li class="sk-present">✓ Process design</li><li class="sk-present">✓ UAT / change mgmt</li><li class="sk-missing">✗ Public-sector experience</li></ul></details>
-  <details class="enrich"><summary>📄 Deep dive</summary><div class="ej-clean">📝 A change-management role driving a multi-year digitalization program; analyst-led, not hands-on.</div><div class="ej-company">🏢 Stable public-sector contractor.</div><div class="ej-pc"><div class="ej-pros"><b>✅ Pros</b><ul><li>English-friendly team</li><li>Hybrid, Frankfurt</li></ul></div><div class="ej-cons"><b>⚠ Cons</b><ul><li>Some German helpful</li></ul></div></div><div class="ej-snip"><b>📌 From the description</b><ul><li><span class="ej-goal">requirements:</span> Define target operating model</li></ul></div><div class="ej-prov">✨ review: qwen3.5:4b</div></details>
-  
-  <div class="expl"></div>
-  <div class="btns">
-    <button aria-label="Not for me — office mouse" title="Office mouse — not for me (=2)" onclick="fb(2,'bad',this)">💻🐀</button>
-    <button aria-label="Interesting" title="Interesting (=4)" onclick="fb(2,'good',this)">😎</button>
-    <button aria-label="шабашка — the dream" title="шабашка — the dream! (=5)" onclick="fb(2,'star',this)">👸✨🧚</button>
-    <button aria-label="Applied" title="Applied (a flag on top of the score)" onclick="fb(2,'applied',this)">applied</button>
-    <a class="open" href="https://example.com/job" target="_blank">open original ↗</a>
-    <span class="fbstate muted"></span>
-    <span class="undo" onclick="undo(2)">↶ change</span>
-  </div>
-  <button type="button" class="note-toggle" id="notebtn-2" onclick="toggleNote(2)">+ note</button>
-  <textarea class="note" id="note-2" rows="2" aria-label="Note about the job" placeholder="why yes/no, what matters… (teaches the judge)" style="display:none"></textarea>
 </div>
 
 <div class="card explore" id="card-3" data-days="4" data-score="2" data-fit="0.3400" data-far="0">

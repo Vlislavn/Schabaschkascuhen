@@ -62,7 +62,7 @@ def _filter_card(con, vacancy_id: int, card: Card, cfg: dict | None = None) -> s
         db.set_status(con, vacancy_id, Status.FILTERED, filter_reason=FilterReason.REMOTE_ONLY,
                       card_json=card.to_json())
         return "filtered"
-    # GEO no longer DROPS here. Far-but-in-Germany onsite/hybrid jobs (a München/Berlin role she
+    # GEO no longer DROPS here. Far-but-in-Germany onsite/hybrid jobs (a München/Berlin role the user
     # might take for a strong magnet) are KEPT and MARKED 📍 at slate-build time + routed to the
     # explore slots (geo.geo_class), per the user's "show far jobs, don't drop them" ask. Remote-only
     # and a German-language reality remain hard drops (real repellents).

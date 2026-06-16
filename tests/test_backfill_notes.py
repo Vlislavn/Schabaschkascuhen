@@ -30,7 +30,7 @@ def test_backfill_fills_note_keeps_score_idempotent(con):
 
     r439 = con.execute("SELECT score_1_5, why_freetext FROM label WHERE vacancy_id=439").fetchone()
     assert r439["score_1_5"] == 5                       # score untouched
-    assert "Master Data" in r439["why_freetext"]        # her note landed
+    assert "Master Data" in r439["why_freetext"]        # the user's note landed
     r1071 = con.execute("SELECT score_1_5, why_freetext FROM label WHERE vacancy_id=1071").fetchone()
     assert r1071["score_1_5"] == 2 and "руками" in r1071["why_freetext"]
 

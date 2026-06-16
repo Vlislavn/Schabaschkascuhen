@@ -224,7 +224,7 @@ def _write_feat(con, vid, *, fit_score, match_score=0.3):
 
 def test_deconflate_downranks_high_judge_low_fit(con, cfg):
     from schabasch import slate
-    # A: magnet job, judge 5 but she can't do it (fit 0.2). B: judge 4, genuine fit 0.95.
+    # A: magnet job, judge 5 but the user can't do it (fit 0.2). B: judge 4, genuine fit 0.95.
     a = _seed_scored(con, "u/space", score=5, company="SpaceCo", title="Orbital Engineer")
     b = _seed_scored(con, "u/data", score=4, company="DataCo", title="Data Analyst")
     _write_feat(con, a, fit_score=0.2)

@@ -1,4 +1,4 @@
-# Schabaschkascuhen — Annotation Guide (for Alina)
+# Schabaschkascuhen — Annotation Guide
 
 This is how you teach the job-finder what a great job looks like for **you** — all on one local
 web page, with one click per job. The system learns from every click and gets sharper over time.
@@ -28,17 +28,13 @@ the cold start — it's been retired; the rating queue replaces it.)
 The score chip on each card runs the same scale — **💻🐀 «офисная мышь» (1) → 👸✨🧚 «шабашка» (5)** —
 on a grey→gold gradient, so you read the verdict at a glance.
 
-What a **👸✨🧚** looks like: a strong magnet (space / animals / military-security / big complex
-project / public sector) **+** Heidelberg/Frankfurt hybrid **+** English-speaking team **+** helps
-you integrate into Germany. A **💻🐀** is a killer: hidden German requirement, biotech, remote-only,
-a staffing agency (Zeitarbeit), or just a boring office-mouse role.
+What a **👸✨🧚** looks like is profile-specific: strong fit, a genuinely exciting domain or role,
+acceptable location/work mode, and no hard blocker. A **💻🐀** is a clear miss: hidden requirements,
+remote/work-mode mismatch, staffing-agency spam, slop text, or just a boring office-mouse role.
 
-You're a **Senior Business Analyst** (BPMN/UML/requirements/process design + Python/SQL/Tableau/Power
-BI) — the **magnets** (`space` · `animals` · `military-security` · `complex-projects` ·
-`public-sector` · `new-domain`) are **aspirational pivot domains**, not your current skills; the best
-matches pair your analyst strengths with one of them. Magnets and **repellents** (`hidden-german` ·
-`biotech` · `slop-text` · `boring-role` · `remote-only` · `temp-agency`) show on the card as the
-"why" tag — the system assigns them; your 💻🐀/😎/👸✨🧚 is the whole signal.
+Your **profile** in `config/profile.yaml` defines the current strengths, target roles, magnets, and
+repellents. Magnets and repellents show on the card as the "why" tag — the system assigns them; your
+💻🐀/😎/👸✨🧚 click is the real signal.
 
 > 💡 Don't overthink it. ~10–20 seconds per job. Your gut reaction is exactly what it's learning.
 

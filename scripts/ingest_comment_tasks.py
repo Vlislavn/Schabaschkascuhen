@@ -1,4 +1,4 @@
-"""Ingest ALL of Alina's review comments into the session_comment_task tracker (W1).
+"""Ingest ALL of the user's review comments into the session_comment_task tracker (W1).
 
 Idempotent. Pulls every label.why_freetext (slate + the 15-June backfill) joined to its vacancy, plus
 the session-md-only notes that never became a label row (two standalone preferences + two jobs whose
@@ -13,7 +13,7 @@ from __future__ import annotations
 from schabasch import config, db, tasks
 
 # Comments that exist ONLY in schabasch/15JuneSession.md (no label.why_freetext row): two standalone
-# preferences (affect ranking globally, not one job) + two jobs she commented on without a slate label.
+# preferences (affect ranking globally, not one job) + two jobs the user commented on without a slate label.
 SESSION_MD_EXTRA: list[dict] = [
     {"comment_text": "Люблю когда в вакансиях lead/principal/ownership — тянут вверх.",
      "theme": "pref"},

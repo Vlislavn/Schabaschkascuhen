@@ -63,7 +63,7 @@ class CanaryVerdict(str, enum.Enum):
 FEEDBACK_TO_SCORE = {"bad": 2, "good": 4, "star": 5}
 
 WHY_TAGS = [
-    # magnets — Alina: ML-инженер ищет новую область (USE_CASE.md)
+    # magnets — profile-specific aspirational domains (USE_CASE.md)
     "animals", "space", "military-security", "complex-projects", "public-sector", "new-domain",
     # repellents
     "hidden-german", "biotech", "slop-text", "boring-role", "remote-only", "temp-agency",

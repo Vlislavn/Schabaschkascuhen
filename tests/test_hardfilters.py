@@ -72,7 +72,7 @@ def test_regression_hidden_german_gate():
 
 def test_dupont_67_conditional_local_language_german():
     """WS1d / DuPont-67: the conditional 'local language … German if the role is based in Germany'
-    phrasing slipped through (exceeds the 35-char window, no required token near 'German'). For Alina
+    phrasing slipped through (exceeds the 35-char window, no required token near 'German'). For the user
     the role IS in Germany → German is de-facto hard → must be caught."""
     jd = ("Requirements:\nFluent English (written and spoken)\n"
           "Fluency in the local language, depending on location:\n"

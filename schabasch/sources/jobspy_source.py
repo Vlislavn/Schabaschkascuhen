@@ -115,7 +115,7 @@ def scrape(cfg: dict, con, *, queries: list[str] | None = None,
             # Break the source ONLY on consecutive real FAILURES (exceptions / blocks like 429),
             # NOT on empty results. A niche magnet query (space, animals, defense) legitimately
             # returns 0 some nights; stopping there silently killed the remaining productive
-            # queries and starved exactly the niche magnets Alina cares about.
+            # queries and starved exactly the niche magnets the user cares about.
             if exc:
                 consec_fail += 1
                 if consec_fail >= MAX_CONSEC_FAILURES:

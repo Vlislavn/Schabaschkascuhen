@@ -1,11 +1,11 @@
-"""Measure the REAL bge-m3 HYBRID (dense + sparse-lexical + ColBERT) on Alina's 37 real labels —
+"""Measure the REAL bge-m3 HYBRID (dense + sparse-lexical + ColBERT) on the user's 37 real labels —
 the SOTA upgrade the matcher was missing (it ships DENSE-ONLY via HyRE; sparse cache was empty +
 ColBERT disabled).
 
 bge-m3 is a native hybrid retrieval model: `BGEM3FlagModel.compute_score(pairs,
 weights_for_different_modes=[w_dense,w_sparse,w_colbert])` returns dense / sparse / colbert and their
 convex blends in one call (FlagEmbedding .../inference/embedder/encoder_only/m3.py:686-699). This probe
-asks: does the sparse/ColBERT hybrid beat or complement HyRE (0.803 pairwise / 0.539 ndcg@10) on her
+asks: does the sparse/ColBERT hybrid beat or complement HyRE (0.803 pairwise / 0.539 ndcg@10) on the user's
 REAL clicks — BEFORE any production wiring (measure-then-ship).
 
 ONE foreground bge-m3 load; everything else is read-only over the DB. Gate on `sysctl vm.swapusage`

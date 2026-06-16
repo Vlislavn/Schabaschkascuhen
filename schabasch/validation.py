@@ -1,7 +1,7 @@
-"""Live match-quality validation against Alina's REAL labels (the `label` table).
+"""Live match-quality validation against the user's REAL labels (the `label` table).
 
-The `/eval` page calls `eval_report`. Gold = her actual score_1_5 ratings (applied→5), so the
-numbers update automatically as she rates jobs in `/annotate` — no manual code re-point. Reuses
+The `/eval` page calls `eval_report`. Gold = the user's actual score_1_5 ratings (applied→5), so the
+numbers update automatically as the user rates jobs in `/annotate` — no manual code re-point. Reuses
 the metric helpers in `schabasch.metrics` (shared with the CLI `eval/match_eval.py`).
 
 Leakage honesty: the fit signals (fit_score / xenc_full / llm_cov / elig_score) are computed from
@@ -60,7 +60,7 @@ def _latest_judge(con, rubric_version: str | None = None) -> dict[int, float]:
 
 
 def eval_report(cfg: dict, con) -> dict:
-    """Compute ranking-quality of each matcher signal against Alina's real labels. Returns
+    """Compute ranking-quality of each matcher signal against the user's real labels. Returns
     {n_labels, n_comparable_pairs, min_pairs, reliable, headline, rows[{name,label,clean,
     pairwise_acc,ndcg@10,spearman,n,n_pairs}]}. Empty/near-empty is handled by the caller."""
     _features._ensure_schema(con)   # /eval may be hit before any tick — guarantee the table exists

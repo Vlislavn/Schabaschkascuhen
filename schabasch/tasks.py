@@ -1,7 +1,7 @@
 """Session-comment → tracked-task sidecar (frozen-contract-safe: a NEW table + helpers owned here,
 db.py untouched, mirroring how vacancy_feature / candidate_profile own their own DDL).
 
-Alina + the user leave free-text review comments while triaging vacancies (label.why_freetext, plus
+The user leaves free-text review comments while triaging vacancies (label.why_freetext, plus
 hand notes in 15JuneSession.md). They were wired into the judge few-shot but never TRACKED — there
 was no "which of these did the product actually act on?" audit. This module turns every comment into
 a theme-tagged task with an open|accounted|wontfix status, so the `/tasks` page shows what's been

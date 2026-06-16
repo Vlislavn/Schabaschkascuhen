@@ -1,6 +1,6 @@
 """Live match-quality validation against REAL labels (schabasch.validation → /eval).
 
-Gold = Alina's actual score_1_5 (applied→5); metrics update as she rates in /annotate. Fit signals
+Gold = the user's actual score_1_5 (applied→5); metrics update as the user rates in /annotate. Fit signals
 (fit_score/xenc/llm_cov/elig) are leak-free (clean=True); judge/effective/triage train on labels
 (clean=False). Reuses schabasch.metrics (shared with the CLI eval/match_eval.py).
 """
@@ -15,7 +15,7 @@ from tests.conftest import make_card
 
 
 def _seed(con, url, *, label, fit, judge=None):
-    """Seed a SCORED vacancy with a stored fit signal, a judge score, and Alina's label."""
+    """Seed a SCORED vacancy with a stored fit signal, a judge score, and the user's label."""
     vid = db.upsert_vacancy(con, {"source": "indeed", "url": url, "title": f"T{url}",
                                   "company": "ACME", "city": "Frankfurt", "description": "x" * 500})
     db.set_status(con, vid, Status.SCORED, card_json=json.dumps(make_card()))

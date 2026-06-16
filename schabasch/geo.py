@@ -186,7 +186,7 @@ def prefilter(cfg: dict, con) -> dict[str, int]:
     """Грубый гео-маркер для NEW+DESCRIBED без карточки.
 
     Far-but-in-Germany cities are NO LONGER dropped (the user wants them shown + marked + routed to
-    explore — a München/Berlin role she might consider for a strong magnet). Nothing is prefiltered
+    explore — a München/Berlin role the user might consider for a strong magnet). Nothing is prefiltered
     out here anymore; the funnel just records near/far/unknown counts. near jobs are returned first
     so the capped nightly normalize budget isn't starved by far ones (see pipeline)."""
     rows = con.execute(

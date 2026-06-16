@@ -15,21 +15,24 @@ updated: 2026-06-12
 
 ## User & Context
 
-**Alina** — **Senior Business Analyst** (Bachelor in Business Informatics, **no master's degree**; lives in Heidelberg, German **A2** — works in English, wants to learn German). Real skills (from her CV): business analysis (requirements, user stories, **BPMN 2.0 / UML**, process design, target operating models, UAT, change mgmt), delivery/PM (backlog, roadmap, stakeholder/vendor mgmt) + **Python, SQL, Tableau, Power BI, AWS, Jira**. **NOT an ML engineer** (that was an error in the old memory). Key characteristic: she **doesn't know what her dream job looks like** («шабашка» — the dream/jackpot gig) — there are no reference examples; she wants to **pivot into a new field** building on strong analytical skills. The system must help her *find* it, not match against a sample.
+The user has a configurable candidate profile in `config/profile.yaml`: current skills, CV-derived
+strengths, target roles, location/work-mode constraints, magnets, and repellents. The core use case is
+not matching against a known example; it is discovering what a dream job («шабашка») looks like for the
+current profile and learning from reactions over time.
 
 **Preference profile (`config/profile.yaml`):**
-- **Magnets (aspirational domains for the pivot, NOT current skills):** animals, space, military/security, large complex projects, public sector / local projects, a new field. Best match = her analytical/process/BI strengths × one of these domains.
-- **Companies:** locally rooted in Germany (IBM/Airbus/Bundeswehr — yes; a purely American startup with no German roots — a miss).
-- **Location:** Heidelberg or Frankfurt, hybrid. Not remote.
+- **Magnets:** aspirational domains or role qualities that can turn a suitable job into a dream job.
+- **Companies:** locally relevant, trustworthy, and aligned with the profile's target direction.
+- **Location:** configurable geography and work-mode preferences.
 - **Integration score:** does the job give integration points in Germany — language, path to citizenship.
 - **Repellers:** a hidden German requirement in an English-language vacancy; biotech; slop/AI-generated text; a boring role; remote-only; Zeitarbeit.
-- **Role:** business / process / systems analysis, program/project management, data/BI — intersecting with an aspirational domain.
+- **Role:** configured target roles intersecting with an aspirational domain or motivating work.
 
 **User limits:** ~10 vacancies per day on the daily slate; the `/annotate` queue grows as the nightly passes run (no hard ceiling — there used to be an xlsx batch of 100, retired).
 
 ## Goal & Business Driver
 
-Today the search is manual reading of variously-formatted descriptions with no filters on hidden parameters (first of all the "de-facto" German language requirement); estimated ~an hour a day, mostly on garbage. Goal: **≤10 minutes a day**, the system filters out garbage, explains its scores, and learns from every decision — including detecting repellers that Alina has not yet put into words herself.
+Today the search is manual reading of variously-formatted descriptions with no filters on hidden parameters. Goal: **≤10 minutes a day**, the system filters out garbage, explains its scores, and learns from every decision — including detecting repellers that are not yet explicitly written in the profile.
 
 ## Job (JTBD)
 
@@ -40,14 +43,14 @@ Today the search is manual reading of variously-formatted descriptions with no f
 - **Step 0 — DONE 2026-06-12** (see [spike/SPIKE_REPORT.md](spike/SPIKE_REPORT.md)): verdict **go-with-changes**. Measured: Indeed ✅ (213 rows, 100% descriptions), Arbeitsagentur API ✅ (314 rows — found a co-primary that wasn't in the plan), LinkedIn ⚠️ (289 rows, 1.7% descriptions), Glassdoor ❌ / Google ❌ (dead; Google dies **silently**). Bootstrap volume confirmed: 731 unique vacancies in one evening (2.4× the target of 300).
 - **Step 0.5 — gate before annotation (mandatory, before bootstrap):** (a) 3 consecutive nights of the same probes via cron — bans show up on the 2nd–3rd night + measure the real churn; (b) LLM pilot: 20 real descriptions through qwen → card validity, translation, language_reality, throughput; (c) decision on LinkedIn (TBC-8); (d) health-counter canaries implemented and tested against Google's "silent zero" signature.
 - **Bootstrap (one-off):** collect ≥300 (already have 731) → annotate 100.
-- **Daily:** cron every night (03:00) — scrape and score; in the morning Alina opens the slate. Every day.
+- **Daily:** cron every night (03:00) — scrape and score; in the morning the user opens the slate. Every day.
 - **Weekly:** taste report + judge revalidation.
 
 ## Actors & Stakeholders
 
 | Actor | Role | Interest / responsibility |
 |-------|------|---------------------------|
-| Alina | initiator, sole user, annotator | find a шабашка in ≤10 min/day |
+| User | initiator, annotator | find a шабашка in ≤10 min/day |
 | Pipeline | nightly vacancy collection | **Indeed + LinkedIn via the Vlislavn/JobSpy fork (1.1.82 + #343) + native Arbeitsagentur fetcher** (v4/jobs, X-API-Key `jobboerse-jobsuche`); incrementality via `hours_old=24–48`; Should: Arbeitnow JSON API, GermanTechJobs RSS; canary + min-row assertion per source |
 | Desc-Fetcher | obtaining the full description (a new explicit stage) | per-board policy: Indeed — already 100%; Arbeitsagentur — `/pc/v3/jobdetails` ~1 req/s (v2 dead); LinkedIn — per TBC-8 |
 | Normalizer (LLM, local qwen3:8b — per the pilot) | raw description → unified **card** | role, company, domain, location/hybrid, language reality, integration potential, 2-line summary, slop-score; translation from German |
@@ -68,7 +71,7 @@ Today the search is manual reading of variously-formatted descriptions with no f
 
 - Search query matrix: magnet domains × roles × {Heidelberg, Frankfurt} — drafted before the spike, calibrated afterward.
 - `config/profile.yaml` — preference profile and judge rubric.
-- Alina's labels (`/annotate` + daily feedback on the slate) — golden dataset.
+- the user's labels (`/annotate` + daily feedback on the slate) — golden dataset.
 
 ## Main Success Scenario (daily)
 
@@ -80,17 +83,17 @@ Today the search is manual reading of variously-formatted descriptions with no f
 6. Authoritative filter **by card**: remote-only, outside Heidelberg/Frankfurt hybrid, `language_reality=de`; the structural `is_remote` is **only a hint** (measured: 29 Indeed rows False-but-hybrid, LinkedIn constantly False). → `status=filtered` with a reason.
 7. The Judge scores each surviving card: a 1–5 rating, a "why" tag (from a dictionary, by rating polarity) **or free-text**, 1 sentence of explanation. → `status=scored`.
 8. The system assembles the slate: **8 exploit** (top by rating, ≤3 per company/domain) + **2 explore** (random/uncertainty sample from scored outside the top and the reserve of past days, marked explore). → page render; there may be fewer than 10 vacancies — you must not pad with garbage.
-9. Alina opens the local page in the morning. → sees the cards: rating, tag, explanation, link to the original.
-10. For each one Alina presses 💻🐀 / 😎 / 👸✨🧚 / applied (or skips). → write to the golden dataset in ≤1 s (scale mapping: 💻🐀=2, 😎=4, 👸✨🧚=5; applied — a separate flag on top of the rating); the vacancy no longer appears in the slate.
-11. Weekly: `/eval` — agreement / matching quality against Alina's real labels; `/gaps` — top recurring skill gaps for the desired roles; the judge's few-shot is topped up with edge labels. → Alina updates `config/profile.yaml` if she wants.
+9. The user opens the local page in the morning. → sees the cards: rating, tag, explanation, link to the original.
+10. For each one, the user presses 💻🐀 / 😎 / 👸✨🧚 / applied (or skips). → write to the golden dataset in ≤1 s (scale mapping: 💻🐀=2, 😎=4, 👸✨🧚=5; applied — a separate flag on top of the rating); the vacancy no longer appears in the slate.
+11. Weekly: `/eval` — agreement / matching quality against the user's real labels; `/gaps` — top recurring skill gaps for the desired roles; the judge's few-shot is topped up with edge labels. → update `config/profile.yaml` when the profile changes.
 
 ## Bootstrap Flow (sub-use case, one-off) — now via `/annotate`
 
 1. Spike night (step 0): run the query matrix over all boards → a "board × volume × quality" report → go / reshape the matrix.
 2. The system collects vacancies, filters (geo/hard), deduplicates, normalizes and judges — the scored ones land in the **`/annotate` queue**.
-3. Alina opens `/annotate` (**the only annotation surface** — the `build-bootstrap`/`labels-import` xlsx batch is retired): a queue of scored-but-unlabeled cards, the same buttons **💻🐀 / 😎 / 👸✨🧚** (score 2/4/5) as on the daily slate. She labels by chunk when she has time; labeled items leave the queue.
-4. After ~30 labels the ML gate (LightGBM) turns on; ~50–100 — the judge is calibrated (`schabasch cv`, agreement ≥75% against her labels); few-shot is topped up with edge labels (💻🐀=2 / 👸✨🧚=5).
-5. **`/eval`** shows matching quality against her REAL labels (live, updated as labeling proceeds); **`/gaps`** — which skills are regularly lacking for the desired roles.
+3. The user opens `/annotate` (**the only annotation surface** — the `build-bootstrap`/`labels-import` xlsx batch is retired): a queue of scored-but-unlabeled cards, the same buttons **💻🐀 / 😎 / 👸✨🧚** (score 2/4/5) as on the daily slate. Label by chunk when there is time; labeled items leave the queue.
+4. After ~30 labels the ML gate (LightGBM) turns on; ~50–100 — the judge is calibrated (`schabasch cv`, agreement ≥75% against the user's labels); few-shot is topped up with edge labels (💻🐀=2 / 👸✨🧚=5).
+5. **`/eval`** shows matching quality against the user's REAL labels (live, updated as labeling proceeds); **`/gaps`** — which skills are regularly lacking for the desired roles.
 
 ## Extensions / Alternate Flows
 
@@ -99,7 +102,7 @@ Today the search is manual reading of variously-formatted descriptions with no f
 - **4a.** Arbeitsagentur's details endpoint returned 403/empty (precedent: v2 died silently): the vacancy stays `new`, retry tomorrow; counter to the log.
 - **5a.** The LLM endpoint is unavailable: the night skips normalization/scoring, the queue is preserved; slate from the reserve with a marker; retry the next night.
 - **7a.** The Judge returned invalid JSON: retry ×2 with backoff → the card stays `normalized`, picked up tomorrow; to the log.
-- **9a.** Alina didn't open the slate: nothing is lost; tomorrow the slate is reassembled accounting for the new ones, the unviewed compete on equal footing.
+- **9a.** The user didn't open the slate: nothing is lost; tomorrow the slate is reassembled accounting for the new ones, the unviewed compete on equal footing.
 - **10a.** 💻🐀 on everything for ≥5 days in a row: the system shows a "what I've learned about your taste" report and proposes expanding the query matrix (exploration mode, Should).
 
 ## Edge Cases
@@ -107,7 +110,7 @@ Today the search is manual reading of variously-formatted descriptions with no f
 | Case | Resolution | Why |
 |--------|---------|------|
 | The same job under different URLs (aggregators) | conservative dedup; fuzzy pairs to the log for manual review | a false merge silently destroys a live vacancy — worse than a duplicate |
-| Vacancy disappeared (404) | `status=expired`, removed from the slate | don't waste Alina's click |
+| Vacancy disappeared (404) | `status=expired`, removed from the slate | don't waste the user's click |
 | Description in German | Normalizer translates, sets a language flag; the *description's* language ≠ the *job's* language | a German-language vacancy about an English-language job exists |
 | English text, but "fließend Deutsch erforderlich" | `language_reality=de` → filtered with a reason in the log | pain #1 from the interview; **measured: 18.1% (27/149) of English descriptions are a trap**; those 27 are a ready test set for the detector |
 | Recruiter spam / agency postings | Arbeitsagentur: deterministic flag `istArbeitnehmerUeberlassung`; Indeed/LinkedIn: tag filter (Should) | the official API gives the flag for free — more accurate than any prompt |
@@ -122,18 +125,18 @@ Today the search is manual reading of variously-formatted descriptions with no f
 ## Output & Post-Success State
 
 - **Output:** the morning slate (local page, up to 10 cards) · a growing golden dataset (CSV export) · a weekly taste report · the funnel log.
-- **Post-state:** labels recorded; the judge's few-shot is fresh; on 👸✨🧚/applied Alina applies via the link herself. The user's next step is to actually apply.
+- **Post-state:** labels recorded; the judge's few-shot is fresh; on 👸✨🧚/applied the user applies via the link. The next step is to actually apply.
 
 ## Acceptance Criteria (Given / When / Then)
 
 | Scenario | Given | When | Then |
 |----------|-------|------|------|
-| Happy path | the nightly run succeeded, ≥10 scored | Alina opens the slate | up to 10 cards (8 exploit + 2 explore marked), each with a rating, "why", explanation, link; review ≤10 min |
+| Happy path | the nightly run succeeded, ≥10 scored | the user opens the slate | up to 10 cards (8 exploit + 2 explore marked), each with a rating, "why", explanation, link; review ≤10 min |
 | Hidden German | an English vacancy with "fließend Deutsch erforderlich" | normalization | `language_reality=de`, doesn't enter the slate, reason in the funnel log |
 | Thin day | scored < 10 | slate assembly | the slate is shorter than 10; not padded with garbage |
 | Board degradation | one source returned 0, the rest are alive | the nightly run | the canary/min-row assertion distinguishes a dead scraper from an empty market; alert in the slate header; the pipeline made it through |
 | Total zero | all boards returned 0 | slate assembly | slate from the reserve + a stale banner + a log entry |
-| Feedback | Alina pressed 💻🐀 | write | label to the golden dataset in ≤1 s; the vacancy doesn't return to the slate |
+| Feedback | the user pressed 💻🐀 | write | label to the golden dataset in ≤1 s; the vacancy doesn't return to the slate |
 | Judge validation | 100 bootstrap labels | 5-fold CV | agreement on the binary intent (rating ≥4 ↔ "interview=yes") ≥75%; otherwise the rubric is revised before launching daily |
 
 ## Non-Functional Requirements
@@ -143,8 +146,8 @@ Today the search is manual reading of variously-formatted descriptions with no f
 - **Privacy:** everything local (SQLite + files + local LLM); nothing leaves the machine; the Arbeitsagentur API is the only external call besides scraping.
 - **Reliability:** the pipeline is idempotent; statuses form a finite-state machine `new → prefiltered | described → normalized → filtered | scored → slated → labeled | expired`; restart is safe; jobspy from the fork `Vlislavn/JobSpy` @ 89b0b3d (editable install — fixes under Vlad's control), spike probes — regression canaries after any bump.
 - **Autonomy (agentic):** read-only risk tier; no auto-applies; the deeper-investigation agent (Could) — read-only of public sources.
-- **Observability:** a funnel log per run; board health counters; the judge↔Alina agreement history (`/eval`).
-- **Tesler:** the complexity of reading variously-formatted descriptions is carried by the system (cards), not Alina.
+- **Observability:** a funnel log per run; board health counters; the judge↔the user agreement history (`/eval`).
+- **Tesler:** the complexity of reading variously-formatted descriptions is carried by the system (cards), not the user.
 
 ## Data Entities & Fields
 
@@ -194,7 +197,7 @@ Today the search is manual reading of variously-formatted descriptions with no f
 | Judge | LLM judge by rubric | rating 1–5, tag/free-text, explanation |
 | Integration score | integration points in Germany | 0–2 (auto-scored — Should) |
 | Hidden German | English text, de-facto needs German | language_reality=de |
-| Golden dataset | all of Alina's labels, a unified scale | CSV export |
+| Golden dataset | all of the user's labels, a unified scale | CSV export |
 | Slate feedback | local-page buttons | 💻🐀=2 · 😎=4 · 👸✨🧚=5 · applied (flag) |
 
 ## Open Questions
@@ -202,7 +205,7 @@ Today the search is manual reading of variously-formatted descriptions with no f
 | ID | Question | Owner | Needed by | Resolution |
 |----|--------|-------|---------|-----------|
 | TBC-1 | Final query matrix — add German terms (Raumfahrt, Verteidigung, Tierpflege, öffentlicher Dienst, Prozessverbesserung…); the English base is already measured | Vlad + system | before bootstrap | partial: the English matrix works (731 in an evening); the German run remains |
-| TBC-2 | Alina's resume (for Should matching and refining the role) | Alina | ✅ closed: CV loaded via `candidate --cv-path` | — |
+| TBC-2 | the user's resume (for Should matching and refining the role) | the user | ✅ closed: CV loaded via `candidate --cv-path` | — |
 | TBC-3 | LLM: local vs API | — | — | **decided 2026-06-12: local, $0** — qwen3.5:4b (Normalizer) / qwen3:8b (Judge), bge-m3 in the cache; quality is verified by the pilot (TBC-7) |
 | TBC-4 | Is a proxy needed for LinkedIn | system | — | **decided for shallow**: 0×429 at 25/request without a proxy; deep pagination and fetch-at-volume → TBC-8 |
 | TBC-5 | Name of category 1 | Vlad | — | decided: «офисная мышь» (office mouse) |

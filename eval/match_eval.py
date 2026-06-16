@@ -1,22 +1,22 @@
-"""Offline match-quality eval harness for Alina's matcher.
+"""Offline match-quality eval harness for the user's matcher.
 
 Why: "make matches SOTA" is meaningless without a metric. This is an EXPERT GOLD SET — each of
-her currently-scored jobs hand-labeled 0..3 for genuine fit (skill match × eligibility × interest),
-grounded in her REAL CV: **Senior Business Analyst** (ex-Software Engineer), Bachelor in Business
+the user's currently-scored jobs hand-labeled 0..3 for genuine fit (skill match × eligibility × interest),
+grounded in the user's REAL CV: **Senior Business Analyst** (ex-Software Engineer), Bachelor in Business
 Informatics (no master), German A2; skills = business analysis (requirements, BPMN/UML, process
 design, target operating models, UAT), delivery/PM, Python/SQL/Tableau/Power BI/AWS, SWE background.
-She is NOT an ML engineer. Magnets (space/animals/military/public-sector/complex/new-domain) are
-ASPIRATIONAL pivot domains, not her skill base. A method is GOOD iff it ranks high-gold above low.
+The user is NOT an ML engineer. Magnets (space/animals/military/public-sector/complex/new-domain) are
+ASPIRATIONAL pivot domains, not the user's skill base. A method is GOOD iff it ranks high-gold above low.
 
-Label rubric (CV-grounded): 3=strong (her core: business-analyst / process-owner / data-BI /
+Label rubric (CV-grounded): 3=strong (the user's core: business-analyst / process-owner / data-BI /
 program-PM / consulting, eligible, ideally a magnet/pivot); 2=good (those skills clearly apply,
 eligible); 1=adjacent/weak (tangential, OR aspiration-domain-but-wrong-skill, OR eligibility-
-limited); 0=poor (not her skills — pure ML-research/sales/finance/procurement/web-dev — OR
+limited); 0=poor (not the user's skills — pure ML-research/sales/finance/procurement/web-dev — OR
 ineligible: PhD/master/student positions).
 
 HONEST CAVEAT (2026-06-15): GOLD was RE-LABELED from the real CV after discovering the stored
-profile was wrong ("ML-engineer" → actually Senior BA), which had INVERTED the labels (her data/
-process/PM/consulting strengths were scored low, pure-ML high). Still an Opus proxy (not Alina's
+profile was wrong ("ML-engineer" → actually Senior BA), which had INVERTED the labels (the user's data/
+process/PM/consulting strengths were scored low, pure-ML high). Still an Opus proxy (not the user's
 own labels; the live `label` table holds ~1 real label) — a dev floor for ranking regressions,
 refine after reading every JD + the qwen re-run on the real CV. Re-point to the `label` table
 once ~30+ real labels accrue via /annotate.
@@ -33,38 +33,38 @@ from schabasch.metrics import (  # noqa: F401
 
 # vacancy_id -> (gold_label, rationale)
 GOLD: dict[int, tuple[int, str]] = {
-    # 3 — her core skill (BA / process / data-BI / program-PM / consulting) + eligible + magnet/pivot
-    166: (3, "PM Laser-Driven Radiation Sources — program/project MANAGEMENT (her core) + complex-project magnet, eligible"),
-    # 2 — her skills clearly apply, eligible
-    904: (2, "Senior Data Scientist Marketing Intelligence — data/marketing analytics = her Nielsen background"),
-    67:  (2, "EMEA Demand Planner Aerospace — forecasting + data + process (her Nielsen work) + aerospace magnet"),
+    # 3 — the user's core skill (BA / process / data-BI / program-PM / consulting) + eligible + magnet/pivot
+    166: (3, "PM Laser-Driven Radiation Sources — program/project MANAGEMENT (the user's core) + complex-project magnet, eligible"),
+    # 2 — the user's skills clearly apply, eligible
+    904: (2, "Senior Data Scientist Marketing Intelligence — data/marketing analytics = the user's Nielsen background"),
+    67:  (2, "EMEA Demand Planner Aerospace — forecasting + data + process (the user's Nielsen work) + aerospace magnet"),
     455: (2, "GRO Data Analytics & Reporting — data analysis + Power BI + process improvement (exact fit); minus: internship"),
     906: (2, "GRO Data Analytics & Reporting — same (data/BI/process + nuclear/complex magnet)"),
-    946: (2, "Inhouse Consulting (Merck) — consulting/process/transformation/PM (her core); minus: pharma-adjacent"),
+    946: (2, "Inhouse Consulting (Merck) — consulting/process/transformation/PM (the user's core); minus: pharma-adjacent"),
     953: (2, "Inhouse Consulting Commercial (Merck) — same"),
     797: (2, "Senior Manager IT Controlling — ROI/cost-benefit + reporting/BI + process optimization (strong BA/analyst overlap)"),
-    826: (2, "Product Owner Vulnerability Mgmt — PO/backlog/requirements (her BA/PO skills) + security magnet; minus: biotech co"),
+    826: (2, "Product Owner Vulnerability Mgmt — PO/backlog/requirements (the user's BA/PO skills) + security magnet; minus: biotech co"),
     # 1 — adjacent/weak: tangential, aspiration-domain-but-wrong-skill, or eligibility-limited
-    354: (1, "Senior ML/AI Engineer (CTI) — security magnet but ML-ENGINEER core she lacks"),
-    341: (1, "AI Engineer (Allianz) — GenAI/ML engineering, not her core (some Python overlap)"),
-    345: (1, "Equity Platform AI Engineer — AI/ML engineering, not her core"),
-    895: (1, "AI Automation Engineer — ML/automation engineering, not her core"),
-    48:  (1, "BDM Space — space magnet but business-DEVELOPMENT/sales, not her"),
-    198: (1, "SWE Full-Stack/Web @ VisionSpace — space/defense magnet but WEB dev, not her"),
-    746: (1, "Senior Simulation Engineer Tire Wear — simulation/vehicle-dynamics core she lacks"),
-    363: (1, "Junior Consultant — consulting fits but junior/for-students (she's senior — mismatch)"),
+    354: (1, "Senior ML/AI Engineer (CTI) — security magnet but ML-ENGINEER core the user lacks"),
+    341: (1, "AI Engineer (Allianz) — GenAI/ML engineering, not the user's core (some Python overlap)"),
+    345: (1, "Equity Platform AI Engineer — AI/ML engineering, not the user's core"),
+    895: (1, "AI Automation Engineer — ML/automation engineering, not the user's core"),
+    48:  (1, "BDM Space — space magnet but business-DEVELOPMENT/sales, not the user's"),
+    198: (1, "SWE Full-Stack/Web @ VisionSpace — space/defense magnet but WEB dev, not the user's"),
+    746: (1, "Senior Simulation Engineer Tire Wear — simulation/vehicle-dynamics core the user lacks"),
+    363: (1, "Junior Consultant — consulting fits but junior/for-students (the user is senior — mismatch)"),
     432: (1, "Finance Associate Management Reporting — reporting/BI overlap but junior + finance domain"),
-    439: (1, "Business Process Owner Master Data — BPO = her skill BUT master-required (elig) + pharma-adjacent"),
-    597: (1, "BPO Third-Party Risk (Merck) — BPO/process/risk = her skill BUT master-required + pharma-adjacent"),
-    451: (1, "Oil & Gas Project Manager — PM skill fits but O&G domain-specific knowledge she lacks"),
-    # 0 — not her skills, or ineligible
-    361: (0, "Expert ML Optimization (self-driving) — deep ML + requires MSc/PhD (she's Bachelor)"),
-    42:  (0, "Sales Manager — pure sales, not her"),
+    439: (1, "Business Process Owner Master Data — BPO = the user's skill BUT master-required (elig) + pharma-adjacent"),
+    597: (1, "BPO Third-Party Risk (Merck) — BPO/process/risk = the user's skill BUT master-required + pharma-adjacent"),
+    451: (1, "Oil & Gas Project Manager — PM skill fits but O&G domain-specific knowledge the user lacks"),
+    # 0 — not the user's skills, or ineligible
+    361: (0, "Expert ML Optimization (self-driving) — deep ML + requires MSc/PhD (the user is Bachelor)"),
+    42:  (0, "Sales Manager — pure sales, not the user's"),
     138: (0, "PhD Agentic AI — doctoral position, no master (ineligible)"),
     139: (0, "PhD Agentic AI — doctoral position, ineligible"),
-    317: (0, "Cyber Threat Analyst — US TS/SCI clearance + not her skills"),
-    449: (0, "Procurement Specialist — procurement, not her"),
-    763: (0, "Purchasing Specialist — purchasing, not her"),
+    317: (0, "Cyber Threat Analyst — US TS/SCI clearance + not the user's skills"),
+    449: (0, "Procurement Specialist — procurement, not the user's"),
+    763: (0, "Purchasing Specialist — purchasing, not the user's"),
     891: (0, "Diploma Student AI Methods — student/thesis position, ineligible"),
     893: (0, "Masterarbeit Applied Stats — Master's-thesis position, ineligible"),
 }
@@ -85,7 +85,7 @@ if __name__ == "__main__":
     from schabasch.candidate import load_candidate
     cfg = config.load()
     con = db.connect(cfg["paths"]["db"])
-    # --real-labels: score against Alina's real label table (live, the same gold the /eval page
+    # --real-labels: score against the user's real label table (live, the same gold the /eval page
     # uses) instead of the synthetic dev-floor GOLD. Default stays synthetic for regression checks.
     real = "--real-labels" in sys.argv
     gold = validation.label_gold(con) if real else _gold_scores()

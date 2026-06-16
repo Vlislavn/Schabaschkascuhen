@@ -3,7 +3,7 @@ Lets me find the best fit blend / effective formula and PROVE it beats baseline 
 
 Two gold sources (Receipts over assertions):
   default        → synthetic Opus GOLD (eval.match_eval.GOLD) — a dev-floor for ranking regressions.
-  --real-labels  → Alina's REAL label table (validation.label_gold) — what actually tracks her taste.
+  --real-labels  → the user's REAL label table (validation.label_gold) — what actually tracks the user's taste.
 
 The 2026-06-15 re-tune was measured here on --real-labels: on real clicks HyRE is the BEST single
 signal and llm_cov the WEAKEST (the inverse of the synthetic ranking), so the headline fit blend is

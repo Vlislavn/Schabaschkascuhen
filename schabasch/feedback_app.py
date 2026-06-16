@@ -136,7 +136,7 @@ def create_app(cfg: dict):
 
     @app.get("/eval", response_class=HTMLResponse)
     def eval_page(request: Request) -> str:
-        # Live match-quality vs Alina's REAL labels (the label table) — updates as she rates in
+        # Live match-quality vs the user's REAL labels (the label table) — updates as the user rates in
         # /annotate. No manual code re-point; the synthetic GOLD stays a CLI-only dev floor.
         from . import validation
         lang = _lang(request)
@@ -148,7 +148,7 @@ def create_app(cfg: dict):
 
     @app.get("/gaps", response_class=HTMLResponse)
     def gaps_page(request: Request) -> str:
-        # Recurring skill gaps across the jobs she WANTS (😎/👸✨🧚/applied) — what to add to the CV
+        # Recurring skill gaps across the jobs the user WANTS (😎/👸✨🧚/applied) — what to add to the CV
         # or learn. Pure aggregation of stored llm_cov_reqs (no LLM call on the web path).
         from . import gaps
         lang = _lang(request)

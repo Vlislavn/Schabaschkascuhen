@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS vacancy_enrichment (
 )
 """
 
-# Goal queries for the extractive pass — what Alina wants to see without opening the JD.
+# Goal queries for the extractive pass — what the user wants to see without opening the JD.
 _SNIPPET_GOALS = [
     ("требования", "key requirements, must-have skills and qualifications"),
     ("что за работа", "main responsibilities and what the role actually involves day to day"),
@@ -50,13 +50,13 @@ _SNIPPET_GOALS = [
     ("подвох", "downsides, red flags, hard requirements like a specific degree or fluent German"),
 ]
 
-_SYSTEM = """Ты помогаешь Алине (Senior Business Analyst, ищет pivot в новый домен: космос/животные/\
-военка/госсектор/сложные проекты; работа ГОЛОВОЙ не руками; немецкий A2, английский C1) быстро понять \
-вакансию по её ТЕКСТУ, не открывая оригинал. Верни ТОЛЬКО JSON:
+_SYSTEM = """Ты помогаешь пользователю быстро понять вакансию по её ТЕКСТУ, не открывая оригинал.
+Ориентируйся на профиль, рубрику и предпочтения, уже заданные в системе: цель — найти dream job,
+а не просто любую подходящую вакансию. Верни ТОЛЬКО JSON:
 {
- "pros": [str],            // 2-4 плюса ИМЕННО для неё, КАЖДЫЙ обоснован текстом вакансии
+ "pros": [str],            // 2-4 плюса для пользователя, КАЖДЫЙ обоснован текстом вакансии
  "cons": [str],            // 1-3 минуса/подвоха (скрытый немецкий, мастер/PhD, hands-on, рутина…)
- "company_review": str,    // 1-2 предложения: что за компания/команда и как это ложится на её цели
+ "company_review": str,    // 1-2 предложения: что за компания/команда и как это ложится на цели
  "clean_summary": str      // если описание мутное/«AI-слоп» — перескажи простыми словами что это за \
 работа и кого ищут; если и так понятно — пустая строка ""
 }

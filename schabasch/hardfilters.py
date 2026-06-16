@@ -23,7 +23,7 @@ GERMAN_REQ = re.compile(
     # CONDITIONAL / "local language" hidden-German (DuPont 67: "Fluency in the local language,
     # depending on location: German if the role is based in Germany"). The "Fluency…German" span
     # exceeds 35 chars and "German if…" carries no required/fluent token nearby — these alternations
-    # catch the conditional phrasing directly. For Alina the role IS in DE → German is de-facto hard.
+    # catch the conditional phrasing directly. For the user the role IS in DE → German is de-facto hard.
     r"local language.{0,80}(German|Deutsch)|"
     r"German\s+if\b.{0,60}(German|Deutschland|based|located|role)|"
     r"Deutsch.{0,30}(wenn|sofern|falls).{0,40}Deutschland)",

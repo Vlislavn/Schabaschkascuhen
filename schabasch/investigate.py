@@ -23,8 +23,8 @@ from .models import normalize_company
 
 logger = logging.getLogger(__name__)
 
-# German legal entity suffixes — a strong, deterministic "rooted in Germany" signal (matters for her
-# integration score: укоренённые в Германии — да; чисто американские стартапы — нет).
+# German legal entity suffixes — a strong, deterministic "rooted in Germany" signal for the
+# integration score: укоренённые в Германии — да; чисто американские стартапы — нет.
 _GERMAN_LEGAL = re.compile(r"\b(gmbh|mbh|\bag\b|\bse\b|\bkg\b|kgaa|\bohg\b|\bug\b|gbr|e\.?\s?v|ev\b)\b", re.I)
 _GERMAN_HINT = re.compile(r"(deutschland|deutsch\w*|german\w*|germany|münchen|munich|berlin|"
                           r"frankfurt|hamburg|stuttgart|köln|cologne|düsseldorf|mannheim|heidelberg)", re.I)

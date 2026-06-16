@@ -2,7 +2,7 @@
 
 Tests the purest form of "LLM-assists-ML": the LLM extracts a CANONICAL skills/requirements
 representation of each JD (boilerplate/slop stripped); we embed THAT with bge-m3 and measure the
-CV↔JD similarity against Alina's real labels — vs the deterministic raw-JD baseline
+CV↔JD similarity against the user's real labels — vs the deterministic raw-JD baseline
 (`sim_skills_requirements`), the current production `fit_score`, and `fit_hyre`/`bgem3_sparse`.
 
 Phase-separated so the heavy 35B extractor never co-loads with the embedder:

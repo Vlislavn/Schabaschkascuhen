@@ -28,7 +28,7 @@ def _profile_response():
 
 def test_extract_candidate_persists_and_returns(cfg, con, monkeypatch):
     monkeypatch.setattr(OllamaClient, "chat_json", lambda self, s, u: _profile_response())
-    result = candidate.extract_candidate(cfg, con, description="Alina, Senior BA, Heidelberg")
+    result = candidate.extract_candidate(cfg, con, description="the user, Senior BA, Heidelberg")
 
     assert result["seniority"] == "senior"
     assert "Python" in result["skills"]

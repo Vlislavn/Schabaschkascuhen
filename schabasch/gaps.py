@@ -1,4 +1,4 @@
-"""Skill-gap analytics: across the jobs Alina WANTS (😎/👸✨🧚/applied), which requirements recur as
+"""Skill-gap analytics: across the jobs the user WANTS (😎/👸✨🧚/applied), which requirements recur as
 ✗ missing / ◐ partial — the "jobs I'd want but keep lacking skill X" report.
 
 Reuses the per-requirement verdicts (ConFit-v3 "non-negotiable requirements") already stored in

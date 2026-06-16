@@ -70,7 +70,7 @@ def test_phd_prose_2step_is_structural_not_lifted():
 
 
 def test_high_fit_lifts_soft_degree_to_1():
-    # WS1c / her SCHOTT ask: a strong-fit job she'd apply to despite a prose degree line is NOT sunk
+    # WS1c / the user's SCHOTT ask: a strong-fit job the user would apply to despite a prose degree line is NOT sunk
     # — the soft factor is lifted to 1.0 (note still emitted, severity still soft → amber).
     g, note, sev = E.eligibility_gate(_req(education_required="master", education_is_hard=True),
                                       BACHELOR, fit_score=0.70, soft_lift_threshold=0.55)
@@ -126,7 +126,7 @@ def test_language_hard_not_lifted_by_high_fit():
 def test_language_unknown_no_penalty():
     g, _, _ = E.eligibility_gate(
         _req(language_required=[{"lang": "French", "cefr": "C1", "is_hard": True}]), BACHELOR)
-    assert g == 1.0                                   # she has no French level → don't gate
+    assert g == 1.0                                   # the user has no French level → don't gate
 
 
 # --- WS1b: "Master Data" / "Scrum Master" ≠ a master's DEGREE (the Merz-439 false positive) ----
@@ -143,7 +143,7 @@ def test_master_data_is_not_a_degree():
 
 def test_merz_439_master_data_no_degree_gate(con):
     """Merz-439: qwen wrongly extracts education_required='master' from the title 'Master Data'.
-    The negative-context guard must NULL it so her #1 job is no longer falsely gated."""
+    The negative-context guard must NULL it so the user's #1 job is no longer falsely gated."""
     class _C:
         def chat_json(self, system, user):
             return {"education_required": "master", "education_is_hard": True,

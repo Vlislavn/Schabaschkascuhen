@@ -2,7 +2,7 @@
 
 Extracts skills/experience/domains/seniority aspects from a candidate description
 or CV text. These aspects become the reference vectors in aspect-based JD matching
-(features.py uses them to score coverage: "do her skills cover the JD requirements?").
+(features.py uses them to score coverage: "do the user's skills cover the JD requirements?").
 
 One profile row at a time; re-run to update. aspect_vecs BLOB is filled later by features.py.
 """
@@ -43,7 +43,7 @@ Return ONLY a JSON object with EXACTLY these keys:
   "languages": {"de": "A2", "en": "C1"},
   "target_roles": ["list", "of", "target job titles"],
   "locations": ["Heidelberg", "Frankfurt"],
-  "magnets": ["what excites her about a role"],
+  "magnets": ["what excites the user about a role"],
   "repellents": ["hard-stop factors"],
   "summary": "2-3 sentence overview"
 }

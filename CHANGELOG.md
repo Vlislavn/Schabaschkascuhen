@@ -20,7 +20,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Frontier eval — LLM-canonical-JD → embed (decision record; NOT shipped) (2026-06-16)
 - New `eval/canonical_jd_experiment.py`: tests the purest "LLM-extracts-for-ML" form — LLM-extract a
   canonical JD skills/requirements list → embed (bge-m3) → CV-cosine signal — vs the raw-JD baseline +
-  production `fit_score`, with **bootstrap 95% CIs** over Alina's 50 real labels + a **5-fold held-out blend**.
+  production `fit_score`, with **bootstrap 95% CIs** over the user's 50 real labels + a **5-fold held-out blend**.
 - **Result:** extractor strength is the lever — **35B canon→cv_full 0.713 pairwise** (clears raw-JD baseline
   0.511; ≈ HyRE 0.724) vs **qwen canon 0.582** (weak). Confirms "complex extraction wants the bigger model".
 - **Decision: NOT wired into `fit_weights`** — the held-out blend does NOT improve (`fit+canon` 0.536 <
@@ -237,7 +237,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (defense-in-depth behind the `hardfilters.GERMAN_REQ` fix).
 
 ### Changed
-- **Match quality RE-TUNED on Alina's 37 REAL labels** (2026-06-15; `eval/match_eval --real-labels`,
+- **Match quality RE-TUNED on the user's 37 REAL labels** (2026-06-15; `eval/match_eval --real-labels`,
   n=37/188 pairs). The blend was tuned on a synthetic Opus gold; on her real clicks that ranking
   inverts. Production `effective` ranking: **pairwise 0.564 → 0.793, ndcg@10 0.247 → 0.483** — beats
   judge_only (0.572), the old effective (0.564) and old fit_score (0.644), approaching the best single
@@ -325,7 +325,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   verify). The agent no longer judges closure (dropped from `_SYSTEM_PROMPT`). Live-verified
   (AA refnr→open, bogus→closed, Indeed→200). Tests in `tests/test_agent_discovery.py`.
 - **Live validation page `/eval`.** Match-quality metrics (pairwise / NDCG@10 / Spearman) computed
-  against Alina's **real labels** (the `label` table, `score_1_5` with `applied→5`), so the numbers
+  against the user's **real labels** (the `label` table, `score_1_5` with `applied→5`), so the numbers
   update as she rates in `/annotate` — no manual code re-point, and it works at any label count
   (banner nudges to `/annotate` below `slate.eval_min_pairs`, default 15). Honest leakage handling:
   the label-independent fit signals (`fit_score`/`xenc_full`/`llm_cov`/`elig_score`) are shown as
@@ -364,7 +364,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   gone.
 
 ### Fixed
-- **Matcher was matching the WRONG person — re-grounded on Alina's real CV.** The stored profile
+- **Matcher was matching the WRONG person — re-grounded on the user's real CV.** The stored profile
   (and a memory note) said "ML engineer"; her actual CV is **Senior Business Analyst** (Bachelor in
   Business Informatics, no master; skills = business analysis / BPMN / process design / target
   operating models + Python/SQL/Tableau/Power BI/AWS). This had INVERTED the ranking — her real
@@ -381,7 +381,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   sweep vs the gold was monotonic (pure fit×elig best, NDCG 0.96); 0.25 makes **fit dominant**
   (match) while the magnet still differentiates do-able jobs (pivot space), without the overfit
   extreme of 0.0. Effective ranking 0.725→**0.79** pairwise, NDCG .799→**.869**. Tuned on the Opus
-  proxy gold — to re-validate on Alina's real `/annotate` labels. `eval/match_eval.py` effective now
+  proxy gold — to re-validate on the user's real `/annotate` labels. `eval/match_eval.py` effective now
   reads the configured floor (benchmark == production), not a hardcoded 0.5.
 - **Removed all silent failures flagged by the IVAI dead-code / AI-slop scan** (`python -m
   scripts.deadcode scan schabasch`; score 20 → 57, error findings 9 → 0, behavior preserved at 235

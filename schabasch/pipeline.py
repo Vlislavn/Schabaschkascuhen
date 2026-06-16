@@ -90,7 +90,7 @@ def nightly_tick(cfg: dict, con, *, german_queries: bool = False, budget: int | 
                 summary, "нормализация (qwen3:8b)")
     _heavy_step(con, "judge", lambda: judge.judge_pending(cfg, con), summary, "оценка (qwen3:8b)")
     _heavy_step(con, "rerank", lambda: features.rerank_scored(cfg, con), summary, "rerank (bge-reranker)")
-    # Investigate only the top few cards (the ones Alina sees first). Each deep-dive is a bounded
+    # Investigate only the top few cards (the ones the user sees first). Each deep-dive is a bounded
     # but ~60-120s agent run, so investigating all 8 exploit slots would dominate the tick; default
     # 3 keeps the cost ~4 min while still enriching the highest-ranked jobs. Tune via slate.investigate_top_n.
     _heavy_step(con, "investigate", lambda: investigate.investigate_top(

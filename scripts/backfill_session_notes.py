@@ -1,16 +1,16 @@
-"""Backfill Alina's hand-written 15 June session feedback into label.why_freetext.
+"""Backfill the user's hand-written 15 June session feedback into label.why_freetext.
 
-Why: she wrote rich per-job reasoning (schabasch/15JuneSession.md), but it lived only in that .md —
-0/37 labels carried a note, so judge.build_fewshot learned NOTHING from her actual reasons (the
+Why: the user wrote rich per-job reasoning (schabasch/15JuneSession.md), but it lived only in that .md —
+0/37 labels carried a note, so judge.build_fewshot learned NOTHING from the user's actual reasons (the
 WS2 textarea→why_freetext loop only captures FUTURE clicks). This one-shot, idempotent backfill maps
 each session-feedback job to its labelled vacancy id (EXACT match, verified against the label table —
-no fuzzy matching) and writes her verbatim note as label.why_freetext via db.insert_label, which
-COALESCEs: it ONLY fills the note, never changes her score/applied flag. Re-running is a no-op.
+no fuzzy matching) and writes the user's verbatim note as label.why_freetext via db.insert_label, which
+COALESCEs: it ONLY fills the note, never changes the user's score/applied flag. Re-running is a no-op.
 
 Effect: on the NEXT (coordinated, model-loading) re-judge tick, build_fewshot surfaces these as
 NOTE: lines — the score<=2 negatives (1071 EUMETSAT "инженер нет", 797 MAM "AI слоп", 906
 Westinghouse "требуют интерна") and the score=5 positive (439 Merz "Master Data ≠ degree") teach the
-judge her real taste. Provenance for every note: schabasch/15JuneSession.md.
+judge the user's real taste. Provenance for every note: schabasch/15JuneSession.md.
 
 Run: .venv/bin/python -m scripts.backfill_session_notes        (PYTHONPATH=repo root, or run from it)
 """
@@ -51,7 +51,7 @@ def backfill(con) -> dict[str, int]:
             out["already"] += 1
             print(f"  vid {vid}: note already present — no-op")
             continue
-        # COALESCE upsert: score_1_5=None keeps her rating, applied=0 keeps it (MAX), only the note fills.
+        # COALESCE upsert: score_1_5=None keeps the user's rating, applied=0 keeps it (MAX), only the note fills.
         db.insert_label(con, vid, {
             "score_1_5": None, "applied": int(row["applied"] or 0), "source": "slate",
             "interview": row["interview"], "why_freetext": note,

@@ -1,6 +1,7 @@
-"""Regenerate the README screenshots from SYNTHETIC demo data (no real listings → no PII, fully
-reproducible/CI-able). Renders the 4 pages via the real `slate.render_*` functions, writes HTML to
-docs/screenshots/*.html, then captures PNGs with headless Chrome if available.
+"""Regenerate the README screenshots from synthetic demo data.
+
+The generated images are intentionally compact README thumbnails, not full-page
+retina dumps. The HTML files are kept next to the PNGs for inspection.
 
     python -m scripts.gen_screenshots            # English (default; what the README embeds)
     python -m scripts.gen_screenshots --lang ru  # Russian, to eyeball the toggle
@@ -17,6 +18,12 @@ from schabasch import slate
 
 OUT = Path(__file__).resolve().parent.parent / "docs" / "screenshots"
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+CAPTURES = {
+    "slate": (900, 900),
+    "annotate": (900, 720),
+    "eval": (900, 430),
+    "gaps": (900, 440),
+}
 
 
 def _card(**kw) -> dict:
@@ -86,19 +93,19 @@ _GAPS = {"n_wanted": 18, "n_jobs_with_reqs": 16, "reliable": True, "rows": [
 
 def render(lang: str) -> dict[str, str]:
     return {
-        "slate": slate.render_html(_SLATE, "2026-06-16", lang=lang),
+        "slate": slate.render_html([_SLATE[0], _SLATE[2]], "2026-06-16", lang=lang),
         "annotate": slate.render_annotate_html(_SLATE[:2], "2026-06-16", total_pending=37, lang=lang),
         "eval": slate.render_eval_html(_EVAL, lang=lang),
         "gaps": slate.render_gaps_html(_GAPS, lang=lang),
     }
 
 
-def capture(html_path: Path, png_path: Path, *, width: int = 1240, height: int = 1700) -> bool:
+def capture(html_path: Path, png_path: Path, *, width: int, height: int) -> bool:
     if not Path(CHROME).exists():
         return False
     subprocess.run([CHROME, "--headless", f"--screenshot={png_path}",
                     f"--window-size={width},{height}", "--hide-scrollbars",
-                    "--force-device-scale-factor=2", "--default-background-color=FFFFFFFF",
+                    "--force-device-scale-factor=1", "--default-background-color=FFFFFFFF",
                     html_path.as_uri()], check=True, capture_output=True)
     return True
 
@@ -106,11 +113,11 @@ def capture(html_path: Path, png_path: Path, *, width: int = 1240, height: int =
 def main(lang: str = "en") -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     pages = render(lang)
-    heights = {"slate": 1180, "annotate": 900, "eval": 760, "gaps": 780}
     for name, html in pages.items():
         hp = OUT / f"{name}.html"
         hp.write_text(html, encoding="utf-8")
-        ok = capture(hp, OUT / f"{name}.png", height=heights.get(name, 1700))
+        width, height = CAPTURES[name]
+        ok = capture(hp, OUT / f"{name}.png", width=width, height=height)
         print(f"  {name}: wrote {hp.name}" + (f" + {name}.png" if ok else " (no Chrome → HTML only)"))
     print(f"done ({lang}) → {OUT}")
 
