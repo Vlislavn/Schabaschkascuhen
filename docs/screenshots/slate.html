@@ -1,0 +1,298 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Slate · 2026-06-16</title><style>
+body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:780px;margin:0 auto;
+padding:20px;background:#f5f6f8;color:#1a1a1a}
+h1{font-size:20px}.muted{color:#595959;font-size:13px}
+.topbar{text-align:right;font-size:12px;margin-bottom:4px}
+.langsw a{color:#1F4E79;margin-left:6px}.langsw b{margin-left:6px;color:#1a1a1a}
+.nav{font-size:13px;margin:2px 0 12px}.nav a{margin-right:10px}
+.progress{font-size:13px;color:#1F4E79;font-weight:600;margin:4px 0 14px}
+.card{background:#fff;border:1px solid #e2e4e8;border-radius:10px;padding:16px 18px;margin:14px 0;
+box-shadow:0 1px 2px rgba(0,0,0,.04)}
+.card.explore{border-left:3px solid #cdd2da}
+.card.done{opacity:.45}
+.alert{background:#fdecea;border:1px solid #f5c6cb;color:#a12622;border-radius:8px;
+padding:10px 14px;margin:10px 0;font-size:13px}
+.alert.warn{background:#f3f4f6;border-color:#e2e4e8;color:#595959}
+.row{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+.title{font-size:16px;font-weight:600;margin:0}
+.score{font-size:20px;line-height:1;padding:6px 12px;border-radius:999px;white-space:nowrap;
+box-shadow:0 1px 3px rgba(0,0,0,.12)}
+.meta{font-size:13px;color:#555;margin:4px 0}
+.meta .meta2{color:#595959}
+.why{display:inline-block;background:#eef0f2;color:#44474c;border-radius:6px;padding:1px 8px;
+font-size:12px;margin-right:6px}
+.summary{white-space:pre-line;margin:8px 0;font-size:14px}
+.expl{font-size:13px;color:#444;font-style:italic}
+.btns{margin-top:10px}
+button{font-size:15px;border:1px solid #ccc;background:#fafafa;border-radius:8px;padding:6px 12px;
+margin-right:6px;cursor:pointer}
+button:hover{background:#eee}
+button:focus-visible,summary:focus-visible,a:focus-visible{outline:2px solid #1F4E79;outline-offset:2px}
+a.open{font-size:13px}.tag-explore{color:#595959;font-size:11px;font-weight:600}
+.posted{color:#595959;font-size:12px}
+.undo{display:none;font-size:12px;color:#595959;cursor:pointer;text-decoration:underline}
+.card.done .undo{display:inline}
+.verified{background:#f3f4f6;border:1px solid #e2e4e8;color:#44474c;border-radius:6px;
+padding:6px 10px;margin:6px 0;font-size:12px}
+.verified .suspect{color:#a85b00;font-weight:600}
+.vnote{color:#4a4a4a;font-style:italic;margin-top:3px}
+.headline{font-size:18px;font-weight:700;color:#26303a;margin:8px 0}
+.metrics{border-collapse:collapse;width:100%;font-size:13px;margin:10px 0}
+.metrics th,.metrics td{text-align:left;padding:6px 8px;border-bottom:1px solid #e2e4e8}
+.metrics th{color:#595959;font-weight:600}
+.leaky{color:#a85b00;font-size:12px}
+details.skills{margin:6px 0;font-size:13px}
+details.skills summary{cursor:pointer;color:#2a2a2a;font-weight:600;list-style:revert}
+details.skills ul{margin:6px 0 0;padding-left:18px;color:#444}
+details.skills li{margin:1px 0}
+.sk-missing{color:#a85b00}.sk-present{color:#1a6b34}
+.far{color:#595959;font-size:12px}
+details.enrich{margin:6px 0;font-size:13px}
+details.enrich summary{cursor:pointer;color:#2a2a2a;font-weight:600;list-style:revert}
+details.enrich .ej-clean{margin:6px 0;color:#333;background:#f7f9fc;border-left:3px solid #cdd6e6;
+padding:6px 10px;border-radius:6px}
+details.enrich .ej-company{margin:5px 0;color:#444}
+.ej-pc{display:flex;gap:14px;margin:6px 0;flex-wrap:wrap}
+.ej-pros,.ej-cons{flex:1;min-width:200px}
+.ej-pros ul,.ej-cons ul,.ej-snip ul{margin:4px 0 0;padding-left:18px}
+.ej-pros li{color:#1a6b34}.ej-cons li{color:#a85b00}
+.ej-snip{margin:6px 0}.ej-snip li{color:#444;margin:2px 0}
+.ej-goal{color:#595959;font-size:11px;text-transform:uppercase}
+.ej-prov{color:#6b6b6b;font-size:11px;margin-top:6px}
+.note-toggle{display:inline-block;font-size:12px;color:#1F4E79;cursor:pointer;margin-top:8px;
+text-decoration:underline;background:none;border:none;padding:0}
+.note{display:block;width:100%;box-sizing:border-box;margin:8px 0 2px;padding:6px 8px;
+border:1px solid #e2e4e8;border-radius:8px;font:13px -apple-system,Segoe UI,Roboto,sans-serif;
+resize:vertical;background:#fcfcfd;color:#1a1a1a}
+.note:focus{outline:none;border-color:#9fb3d6}
+.chips{margin:2px 0 12px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.chips .lbl{color:#595959;font-size:12px;margin-right:2px}
+.chip{font-size:12px;font-family:inherit;margin:0;border:1px solid #d7dbe0;background:#fff;
+color:#555;border-radius:999px;padding:3px 10px;cursor:pointer;user-select:none}
+.chip:hover{background:#f0f2f5}
+.chip.on{background:#1F4E79;border-color:#1F4E79;color:#fff;font-weight:600}
+.card.hidden{display:none}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
+clip:rect(0,0,0,0);white-space:nowrap;border:0}
+details.legend{margin:2px 0 12px;font-size:13px}
+details.legend summary{cursor:pointer;color:#595959;list-style:revert}
+details.legend .leg{display:flex;flex-wrap:wrap;gap:4px 14px;margin-top:6px;color:#444;font-size:12px}
+details.legend .leg span{white-space:nowrap}
+@media (max-width:480px){
+  body{padding:12px}
+  .meta .meta2{display:block;margin-top:2px}
+  .ej-pc{flex-direction:column;gap:6px}
+  .ej-pros,.ej-cons{min-width:0}
+  button{min-height:44px;padding:8px 14px}
+  table.metrics thead{position:absolute;left:-9999px}
+  table.metrics tr{display:block;border:1px solid #e2e4e8;border-radius:8px;margin:8px 0;
+  padding:6px 10px;background:#fff}
+  table.metrics td{display:flex;justify-content:space-between;gap:10px;border:0;padding:3px 0;
+  text-align:right}
+  table.metrics td::before{content:attr(data-label);color:#595959;font-weight:600;text-align:left}
+}
+</style></head>
+<body>
+<div class="topbar"><span class="langsw"><b>English</b> · <a href="?lang=ru">Русский</a></span></div>
+<h1>Slate · 2026-06-16</h1>
+<p class="nav muted"><a href="/annotate?lang=en">annotate more ↗</a><a href="/eval?lang=en">validation ↗</a><a href="/gaps?lang=en">gaps ↗</a><a href="/tasks?lang=en">tasks ↗</a><a href="/funnel?lang=en">funnel ↗</a> <button id="fetch-btn" onclick="triggerFetch()" title="Collect fresh jobs (takes a few minutes)">🔄 fetch new jobs</button><span id="fetch-status" class="muted"></span></p><p class="progress" id="progress" data-total="3">Marked 0/3</p><details class="legend"><summary>❔ legend</summary><div class="leg"><span>💻🐀 office mouse (1) → 👸✨🧚 шабашка (5) — score</span><span>⛔ you don&#x27;t meet a requirement</span><span>⚠ risk / skill gap</span><span>🎯 skill coverage</span><span>📄 deep dive</span><span>🛠 hands-on engineer — not for you</span><span>🎓 intern / junior</span><span>📍 far (but in Germany)</span><span>🇩🇪 company rooted in Germany</span><span>🔎 company check</span><span>🧭 interest check (explore)</span></div></details><div class="chips"><span class="lbl">⏱</span><button type="button" class="chip" data-group="time" onclick="chip('time',1,this)">today</button><button type="button" class="chip" data-group="time" onclick="chip('time',3,this)">3 days</button><button type="button" class="chip" data-group="time" onclick="chip('time',7,this)">week</button><button type="button" class="chip on" data-group="time" onclick="chip('time',1000000000,this)">all</button><span class="lbl">·</span><button type="button" class="chip on" data-group="order" onclick="chip('order','fit',this)">🎯 promising</button><button type="button" class="chip" data-group="order" onclick="chip('order','fresh',this)">🆕 fresh</button><span class="lbl">·</span><button type="button" class="chip on" data-group="far" onclick="chip('far',0,this)">📍 far</button><span class="lbl">·</span><button type="button" class="chip" data-group="weak" onclick="chip('weak',0,this)">🙈 hide weak</button></div>
+<div id="cards">
+<div class="card" id="card-1" data-days="4" data-score="5" data-fit="0.8200" data-far="0">
+  <div class="row">
+    <div>
+      <p class="title">Business Analyst — Satellite Programs </p>
+      <p class="meta">Aurora Space GmbH · Heidelberg<span class="meta2"> · hybrid · <span class="posted">posted 4d ago</span></span></p>
+    </div>
+    <div class="score" role="img" aria-label="score 5 of 5" title="score 5/5: шабашка (dream gig)" style="background:linear-gradient(135deg,#ff5fa2,#ffd24d)">👸✨🧚</div>
+  </div>
+  
+  <div><span class="why">space</span></div>
+  <div class="summary">Shape requirements for ground-segment software on Europe&#x27;s next earth-observation constellation.</div>
+  <details class="skills"><summary>🎯 Skills 80% · 3 ✓ · 1 ◐ · 1 ✗</summary><ul><li class="sk-present">✓ Business analysis</li><li class="sk-present">✓ BPMN 2.0</li><li class="sk-present">✓ Stakeholder management</li><li class="sk-partial">◐ Aerospace domain</li><li class="sk-missing">✗ German C1</li></ul></details>
+  
+  <div class="verified">🔎 company: large · €70–90k · English-speaking team · 🇩🇪 rooted in Germany · open ✓<div class="vnote">Mid-cap European space-systems integrator.</div></div>
+  <div class="expl"></div>
+  <div class="btns">
+    <button aria-label="Not for me — office mouse" title="Office mouse — not for me (=2)" onclick="fb(1,'bad',this)">💻🐀</button>
+    <button aria-label="Interesting" title="Interesting (=4)" onclick="fb(1,'good',this)">😎</button>
+    <button aria-label="шабашка — the dream" title="шабашка — the dream! (=5)" onclick="fb(1,'star',this)">👸✨🧚</button>
+    <button aria-label="Applied" title="Applied (a flag on top of the score)" onclick="fb(1,'applied',this)">applied</button>
+    <a class="open" href="https://example.com/job" target="_blank">open original ↗</a>
+    <span class="fbstate muted"></span>
+    <span class="undo" onclick="undo(1)">↶ change</span>
+  </div>
+  <button type="button" class="note-toggle" id="notebtn-1" onclick="toggleNote(1)">+ note</button>
+  <textarea class="note" id="note-1" rows="2" aria-label="Note about the job" placeholder="why yes/no, what matters… (teaches the judge)" style="display:none"></textarea>
+</div>
+
+<div class="card" id="card-2" data-days="4" data-score="4" data-fit="0.6600" data-far="0">
+  <div class="row">
+    <div>
+      <p class="title">Process Owner — Public Sector Digitalization </p>
+      <p class="meta">Demo Verwaltung AG · Frankfurt am Main<span class="meta2"> · hybrid · <span class="posted">posted 4d ago</span></span></p>
+    </div>
+    <div class="score" role="img" aria-label="score 4 of 5" title="score 4/5: 4/5" style="background:linear-gradient(135deg,#e98b3a,#f6c463)">😎</div>
+  </div>
+  
+  <div><span class="why">public-sector</span></div>
+  <div class="summary">Own target operating models for a state agency&#x27;s case-management rollout.</div>
+  <details class="skills"><summary>🎯 Skills 70% · 2 ✓ · 0 ◐ · 1 ✗</summary><ul><li class="sk-present">✓ Process design</li><li class="sk-present">✓ UAT / change mgmt</li><li class="sk-missing">✗ Public-sector experience</li></ul></details>
+  <details class="enrich"><summary>📄 Deep dive</summary><div class="ej-clean">📝 A change-management role driving a multi-year digitalization program; analyst-led, not hands-on.</div><div class="ej-company">🏢 Stable public-sector contractor.</div><div class="ej-pc"><div class="ej-pros"><b>✅ Pros</b><ul><li>English-friendly team</li><li>Hybrid, Frankfurt</li></ul></div><div class="ej-cons"><b>⚠ Cons</b><ul><li>Some German helpful</li></ul></div></div><div class="ej-snip"><b>📌 From the description</b><ul><li><span class="ej-goal">requirements:</span> Define target operating model</li></ul></div><div class="ej-prov">✨ review: qwen3.5:4b</div></details>
+  
+  <div class="expl"></div>
+  <div class="btns">
+    <button aria-label="Not for me — office mouse" title="Office mouse — not for me (=2)" onclick="fb(2,'bad',this)">💻🐀</button>
+    <button aria-label="Interesting" title="Interesting (=4)" onclick="fb(2,'good',this)">😎</button>
+    <button aria-label="шабашка — the dream" title="шабашка — the dream! (=5)" onclick="fb(2,'star',this)">👸✨🧚</button>
+    <button aria-label="Applied" title="Applied (a flag on top of the score)" onclick="fb(2,'applied',this)">applied</button>
+    <a class="open" href="https://example.com/job" target="_blank">open original ↗</a>
+    <span class="fbstate muted"></span>
+    <span class="undo" onclick="undo(2)">↶ change</span>
+  </div>
+  <button type="button" class="note-toggle" id="notebtn-2" onclick="toggleNote(2)">+ note</button>
+  <textarea class="note" id="note-2" rows="2" aria-label="Note about the job" placeholder="why yes/no, what matters… (teaches the judge)" style="display:none"></textarea>
+</div>
+
+<div class="card explore" id="card-3" data-days="4" data-score="2" data-fit="0.3400" data-far="0">
+  <div class="row">
+    <div>
+      <p class="title">Data Analyst (Werkstudent) <span class="tag-explore">🧭 interest check</span></p>
+      <p class="meta">Beispiel Biotech · Heidelberg<span class="meta2"> · hybrid · <span class="posted">posted 4d ago</span> · <span class="far">🎓 intern/junior</span></span></p>
+    </div>
+    <div class="score" role="img" aria-label="score 2 of 5" title="score 2/5: 2/5" style="background:linear-gradient(135deg,#8b93a3,#b9c1cf)">🐭</div>
+  </div>
+  <div class="alert warn">⚠ Borderline requirement: role is a working-student / intern position (but a strong match)</div><div class="alert warn">⚠ big skill gap (match 34%)</div>
+  <div><span class="why">biotech</span></div>
+  <div class="summary">Part-time student role in a lab-software team.</div>
+  
+  
+  
+  <div class="expl"></div>
+  <div class="btns">
+    <button aria-label="Not for me — office mouse" title="Office mouse — not for me (=2)" onclick="fb(3,'bad',this)">💻🐀</button>
+    <button aria-label="Interesting" title="Interesting (=4)" onclick="fb(3,'good',this)">😎</button>
+    <button aria-label="шабашка — the dream" title="шабашка — the dream! (=5)" onclick="fb(3,'star',this)">👸✨🧚</button>
+    <button aria-label="Applied" title="Applied (a flag on top of the score)" onclick="fb(3,'applied',this)">applied</button>
+    <a class="open" href="https://example.com/job" target="_blank">open original ↗</a>
+    <span class="fbstate muted"></span>
+    <span class="undo" onclick="undo(3)">↶ change</span>
+  </div>
+  <button type="button" class="note-toggle" id="notebtn-3" onclick="toggleNote(3)">+ note</button>
+  <textarea class="note" id="note-3" rows="2" aria-label="Note about the job" placeholder="why yes/no, what matters… (teaches the judge)" style="display:none"></textarea>
+</div></div>
+<script>const LANG="en";
+const T={"marked": "Marked", "done": "✅ Done ·", "fetch_starting": " starting…", "fetch_busy": "busy", "fetch_running": " ⏳ running… (you can close this; it updates by morning)", "fetch_working": "working", "fetch_done": " ✓ done — refresh the page", "task_accounted": "✅ done", "task_wontfix": "🚫 won't fix", "task_open": "⏳ open"};
+
+async function fb(id, action, el){
+  const card = document.getElementById('card-'+id);
+  // WS2: include the free-text note so a correction ('Master Data ≠ degree', 'люблю lead') becomes
+  // durable judge-visible signal (why_freetext → few-shot). Empty note → null (don't wipe a prior).
+  const noteEl = document.getElementById('note-'+id);
+  const note = noteEl && noteEl.value.trim() ? noteEl.value.trim() : null;
+  try{
+    const r = await fetch('/feedback', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({vacancy_id:id, action:action, note:note})});
+    if(r.ok){ card.classList.add('done');
+      card.querySelector('.fbstate').textContent = ' ✓ '+action; bump(); }
+  }catch(e){ alert('feedback failed: '+e); }
+}
+// Undo is client-side only: re-enable the card so a fresh click overwrites the label (the
+// insert_label upsert keys on (vacancy_id, source) — re-rating replaces, no delete path needed).
+function undo(id){
+  const card = document.getElementById('card-'+id);
+  card.classList.remove('done');
+  const st = card.querySelector('.fbstate'); if(st) st.textContent='';
+  bump();
+}
+// Goal-Gradient: live "N/M отмечено" counter, recomputed from the VISIBLE DOM so fb()+undo()+filter agree.
+function bump(){
+  const p = document.getElementById('progress'); if(!p) return;
+  const total = +p.dataset.total;
+  const done = document.querySelectorAll('.card.done').length;
+  p.textContent = (done>=total && total>0) ? (T.done+' '+done+'/'+total)
+                                            : (T.marked+' '+done+'/'+total);
+}
+// WS3 client-side filter chips: time window (data-days) + order (перспективные=fit DOM order /
+// свежие=by days) + far toggle. No new page/endpoint (Hick/Tesler — subtract). Cards carry data-*.
+var _F = {days: 1e9, order: 'fit', far: true, hideWeak: false};
+var _ORDER = [];   // original card ids in effective (fit-led) order, for restoring 'перспективные'
+function _initFilter(){
+  _ORDER = Array.prototype.map.call(document.querySelectorAll('#cards .card'), function(c){return c.id;});
+  applyFilter();
+}
+function chip(group, val, el){
+  if(group==='far'){ _F.far = !_F.far; el.classList.toggle('on', _F.far); }
+  else if(group==='weak'){ _F.hideWeak = !_F.hideWeak; el.classList.toggle('on', _F.hideWeak); }
+  else {
+    var sel = document.querySelectorAll('.chip[data-group="'+group+'"]');
+    Array.prototype.forEach.call(sel, function(c){c.classList.remove('on');});
+    if(el) el.classList.add('on');
+    if(group==='time') _F.days = val; else if(group==='order') _F.order = val;
+  }
+  applyFilter();
+}
+function applyFilter(){
+  var cont = document.getElementById('cards'); if(!cont) return;
+  var cards = Array.prototype.slice.call(cont.querySelectorAll('.card'));
+  cards.forEach(function(c){
+    var days = +c.dataset.days, far = c.dataset.far==='1';
+    // "скрыть слабые": weak = judge score ≤2 OR fit below the slate quality floor (0.45)
+    var weak = (+c.dataset.score <= 2) || (+c.dataset.fit < 0.45);
+    var show = days <= _F.days && !(far && !_F.far) && !(weak && _F.hideWeak);
+    c.classList.toggle('hidden', !show);
+  });
+  var visible = cards.filter(function(c){return !c.classList.contains('hidden');});
+  if(_F.order==='fresh'){
+    visible.sort(function(a,b){return (+a.dataset.days) - (+b.dataset.days);});
+  } else {
+    visible.sort(function(a,b){return _ORDER.indexOf(a.id) - _ORDER.indexOf(b.id);});
+  }
+  visible.forEach(function(c){cont.appendChild(c);});
+}
+// UI-triggered fetch (full pipeline, async + single-flight server-side). Polls /fetch-status.
+function triggerFetch(){
+  var btn = document.getElementById('fetch-btn'), st = document.getElementById('fetch-status');
+  if(btn) btn.disabled = true;
+  if(st) st.textContent = T.fetch_starting;
+  fetch('/fetch?lang='+LANG, {method:'POST'}).then(function(r){ return r.json().then(function(d){return {ok:r.ok, d:d};}); })
+   .then(function(x){
+     if(!x.ok){ if(st) st.textContent = ' ⚠ ' + (x.d.error || T.fetch_busy); if(btn) btn.disabled = false; return; }
+     if(st) st.textContent = T.fetch_running;
+     var poll = setInterval(function(){
+       fetch('/fetch-status?lang='+LANG).then(function(r){return r.json();}).then(function(s){
+         if(s.running){
+           var label = s.stage_human || s.stage || T.fetch_working;
+           var pos = (s.stage_index >= 0) ? (' (' + (s.stage_index+1) + '/' + s.n_stages + ')') : '';
+           var heavy = s.heavy ? ' 🧠' : '';   // model-loading stage (qwen/bge)
+           if(st) st.textContent = ' ⏳ ' + label + pos + heavy + '…';
+         }
+         else { clearInterval(poll); if(btn) btn.disabled = false;
+                if(st) st.textContent = s.error ? (' ⚠ ' + s.error) : T.fetch_done; }
+       }).catch(function(){ clearInterval(poll); if(btn) btn.disabled = false; });
+     }, 5000);
+   }).catch(function(e){ if(st) st.textContent = ' ⚠ ' + e; if(btn) btn.disabled = false; });
+}
+// /tasks: flip a comment-task's status (open|accounted|wontfix) → POST /task-status, update inline.
+function taskStatus(id, status){
+  fetch('/task-status', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({task_id:id, status:status})})
+   .then(function(r){return r.json();}).then(function(d){
+     if(!d.ok) return;
+     var row = document.getElementById('task-'+id); if(!row) return;
+     row.dataset.status = status;
+     var b = row.querySelector('.tstate');
+     if(b) b.textContent = status==='accounted' ? T.task_accounted
+                         : status==='wontfix' ? T.task_wontfix : T.task_open;
+   });
+}
+// Note toggle (Selective Attention): reveal the hidden note field after the buttons + focus it.
+function toggleNote(id){
+  var t = document.getElementById('note-'+id); if(!t) return;
+  t.style.display = 'block'; t.focus();
+  var b = document.getElementById('notebtn-'+id); if(b) b.style.display = 'none';
+}
+_initFilter();
+</script>
+</body></html>
