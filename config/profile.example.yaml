@@ -44,6 +44,8 @@ search:
     - Datenwissenschaftler
   cities: ["Heidelberg, Germany", "Frankfurt am Main, Germany"]
   hours_old: 48
+  # linkedin_hours_old: 24   # ECONOMY (opt-in): tighter LinkedIn window → fewer/fresher jobs, ~half
+                             #   the LinkedIn re-fetch time. Unset = use hours_old.
   results_wanted: 25
   sources: [indeed, linkedin, arbeitsagentur]
   agent_discovery: false   # opt-in ReAct web crawl — low yield with local qwen3:8b (needs SearXNG
@@ -92,6 +94,8 @@ memory:                        # Apple-silicon swap safety for the UI /fetch wor
   hard_floor_pct: 10           # refuse to start a heavy stage below this % free RAM
   soft_floor_pct: 20           # warn / background-yield threshold
   watchdog_interval_seconds: 15
+  swap_growth_floor_mb: 512    # CAPA: watchdog also flags pressure when swap GROWS >N MB/sample
+                               #   (growth-delta; macOS free-RAM% is blind to swap saturation). 0 = off.
 
 judge:
   rubric_version: "v3-example"
@@ -104,6 +108,8 @@ slate:
   port: 8787
   fresh_days: 14            # daily slate shows only jobs re-seen (last_seen) within N days — keeps it
                             # current. /annotate is exempt (keeps the full backlog for labeling).
+  max_reshows: 2            # de-dup: a vacancy you already RATED is never re-served; a shown-but-unrated
+                            #   one may reappear at most this many days before it decays out.
   investigate_top_n: 6      # deep-search (agent) runs on the top-N SCORED cards each tick
   annotate_batch: 30        # /annotate queue: max judged-but-unrated cards per page (cold-start chunk)
   eval_min_pairs: 15        # /eval: below this many comparable label-pairs the page warns metrics are noisy
@@ -112,11 +118,45 @@ slate:
   # EFFECTIVE (slate sort) = fit_score · (1 + judge_blend_beta·judge_norm) · elig_score (de-conflate:
   # fit leads, the magnet judge tie-breaks). Raise judge_blend_beta once enough 4/5 labels accrue.
   judge_blend_beta: 0.0
+  # cov_weight (λ): blend honest per-requirement coverage into the headline — fit_eff = (1-λ)·fit + λ·llm_cov.
+  # MEASURED 2026-06-16: λ>0 REGRESSED the real-label fit (pairwise 0.862→~0.76) — the labels reward
+  # aspiration-magnet jobs, so coverage-blending disagrees with them. Kept OFF (λ=0); see docs/MATCHING_SOTA.md.
+  cov_weight: 0.0
+  # 0%-skill floor: a job where you meet ZERO extracted hard requirements (llm_cov==0) is multiplied
+  # down (out of the exploit slots) however high its magnet/semantic fit. 1.0 = off. MEASURED 2026-06-16:
+  # 0.0 improved the real-label guardrail (0.862→0.871) — a HARD rule at exactly-0, unlike the cov BLEND.
+  zero_cov_mult: 1.0
+  # role_kind_mult: static down-rank per role kind (hands_on_engineer/junior/lead). LEARNING (P2) can
+  # replace these from the user's 🙅 'wrong role' votes once enough accrue:
+  role_kind_learn:
+    enabled: false          # OFF until the role-fit votes accrue + the eval guardrail proves no regression
+    n_min: 5                # golden role votes per kind before the learned rate overrides the static default
+    alpha: 3.0              # Beta/shrink prior strength (smaller = trust real votes faster)
+    mult_floor: 0.5         # recall-first: a fully-disliked kind never hard-drops below this
   quality_floor: 0.45       # an exploit slot must clear this `effective` score (below-floor → explore only,
                             #   never hidden). Thin day → fewer cards, not junk padding.
   fit_gate_floor: 0.25      # legacy (old judge-led gate); used only by the eval synthetic-GOLD path
   hyre_blend: 0.1
   fit_warn_threshold: 0.4   # below this, the card shows a ⚠ "big skill gap" note
+  # FRESHNESS RE-RANK: slate sort key = effective · (floor + (1-floor)·0.5^(days_posted/halflife)).
+  # REORDERS only (effective + quality_floor stay pure fit) → fresh-slightly-worse beats stale-great
+  # without disqualifying it; /eval preserved (no live dates → recency neutral). floor 1.0 = off.
+  recency_halflife_days: 7  # today×1.0, 7d×0.80, 14d×0.70, old→floor
+  recency_floor: 0.6        # oldest jobs keep 60% of rank weight
+
+serve:                      # `schabasch serve` startup behavior
+  fetch_on_start: true      # retrain (checkpointing the previous model) + full fetch on every start,
+                            #   then the bot greets when ready. `serve --no-fetch` skips it.
+  refetch_after_hours: 12   # but SKIP the startup fetch if one completed within this many hours (a
+                            #   quick restart reuses the recent slate). 0 = always fetch; `--refetch` forces.
+  investigate_seed: 2       # investigate the top-N cards before greeting; the rest enrich on-the-go.
+
+telegram:                   # optional Telegram bot (separate repo schabasch-tg-bot, pip install -e it)
+  enabled: false            # true → `schabasch serve` also spawns `python -m schabasch_bot`
+  token: ""                 # BotFather token (or set the TELEGRAM_BOT_TOKEN env var instead)
+  chat_id: 0                # 0 = auto-lock: the FIRST chat to /start claims the bot (then /reset to free).
+                            #   Set a specific id to hard-lock to that chat instead (prod / golden labels).
+  chat_id_debug: 0          # the chat `serve --dry` locks to (you, while debugging — feedback not persisted).
 
 triage:
   cutoffs: {must: 4.5, should: 3.5, could: 2.0}
@@ -127,6 +167,9 @@ triage:
 features:
   model: "BAAI/bge-m3"
   reranker: "BAAI/bge-reranker-v2-m3"
+  torch_num_threads: 1         # CAPA: cap torch's OpenMP intra-op pool (1 = inline, no pool, can't
+                               #   deadlock). The features stage deadlocked on the tick thread —
+                               #   parallel copy_kernel hung in _pthread_cond_wait. Raise on a roomy box.
   rerank_top_k: 30
   coverage_tau: 0.6
   esco_csv: null
@@ -142,9 +185,26 @@ features:
 
 eligibility:                       # hard-qualification gate (education/PhD/credentials/language)
   floor: 0.35    # multiplier for a clear hard miss (e.g. PhD-role w/o Master) → sinks to explore
+  hard_blockers: []   # deterministic JD regexes for legal barriers you can't meet (e.g. a foreign
+                      #   security clearance / citizenship) → STRUCTURAL floor. [] = off. Example:
+                      #   ["\\b(TS/SCI|security clearance)\\b", "\\bU\\.?S\\.? citizen"]
   mid: 0.6       # multiplier for a single-step gap (e.g. needs Master, has Bachelor; lang one below)
   soft_lift_threshold: 0.55  # a SOFT (prose-degree) gap is lifted to 1.0 when fit_score ≥ this.
                              #   Structural blockers (PhD position, hard non-EN language) are NEVER lifted.
+  soft_lift_cov_min: 0.0     # also require llm_cov ≥ this for the lift (gate aspiration-inflated fit).
+                             #   MEASURED 2026-06-16: >0 didn't beat baseline on real labels → kept 0 (off).
+
+investigate:                 # persistent employer knowledge base — research a company ONCE, reuse
+                             # durable facts on future vacancies + ticks; only fresh news/reputation
+                             # is re-asked past its TTL. investigate_top skips already-investigated jobs.
+  company_facts_ttl_days: 90
+  company_news_enabled: true
+  company_news_refresh_days: 30
+
+browsing:                    # keyless web (agent WebSearchTool + schabasch/browsing/ adapters)
+  search_backend: ddg        # ddg (keyless) | searx (set searxng_url). NEVER tavily (no API keys)
+  searxng_url: null          # self-hosted SearXNG → multi-engine; null → keyless DuckDuckGo
+  wikidata_enabled: true     # typed company entity resolution (browsing.entity.resolve)
 
 agent:                       # bounds per ReAct agent run (discover + investigate) — stop runaway
   max_turns: 6

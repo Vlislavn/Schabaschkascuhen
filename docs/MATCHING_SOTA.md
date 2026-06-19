@@ -25,6 +25,30 @@ A 7-angle SOTA research sweep (41 repos, 33 techniques, adversarially verified) 
 
 ConFit ships **no checkpoints** → reimplement HyRE + the gate prompt. CareerBERT DOES ship a checkpoint, so it's the one matcher worth trying off-the-shelf.
 
+## ❌ REJECTED — blending llm_cov into the slate rank (measured 2026-06-16)
+
+User flagged a VINFAST "ML Optimization Engineer" (Skills 12%, master-required) at slate #1 for a
+Business Analyst. Hypothesis: rank ignores honest coverage — blend `llm_cov` into the effective score
+(`fit_eff = (1-λ)·fit + λ·llm_cov`) + gate the degree soft-lift on `llm_cov` + harder engineer down-rank.
+
+**Measured on the 50 REAL labels** (`validation.eval_report`, effective pairwise/ndcg@10):
+
+| config | pairwise | ndcg@10 |
+|---|---|---|
+| baseline (λ=0, eng 0.7) | **0.862** | 0.571 |
+| λ=0.3 cov_min .3 eng .5 | 0.787 | 0.412 |
+| λ=0.4 cov_min .3 eng .5 | 0.776 | 0.413 |
+| cov-gate only (λ=0, cov_min .3, eng .5) | 0.808 | 0.538 |
+| engineer 0.7→0.3 (λ=0) | 0.860 | 0.571 |
+
+Every cov-blend variant **regressed** pairwise by 0.05–0.10. **Root cause: the labels reward the
+aspiration jobs** — VINFAST's `user_label = 4` (the user rated it "really cool, but an engineer"). The
+ranking is faithfully obeying the label; no formula fixes the complaint without contradicting the data.
+**Shipped: knobs OFF** (`slate.cov_weight=0`, `eligibility.soft_lift_cov_min=0`). The real fix was
+**de-dup** (a rated job is excluded → VINFAST drops off the slate) + re-labelling aspiration jobs.
+Side win: the shared `slate.effective_score` now includes role-kind (the old eval omitted it) → honest
+baseline rose 0.819→**0.862** pairwise.
+
 ## ⚠️ CORRECTION — re-tuned on 37 REAL labels (2026-06-15 PM)
 
 The Tier-1 notes below were tuned on a **synthetic Opus gold**. Once the user hand-labelled 37 real jobs

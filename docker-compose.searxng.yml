@@ -1,0 +1,18 @@
+# OPTIONAL keyless multi-engine search backend for the agent + browsing.search adapter.
+# Default search is keyless DuckDuckGo (ddgs) with NO infra; stand this up only for higher quality.
+#
+#   docker compose -f docker-compose.searxng.yml up -d
+#   then set  browsing.searxng_url: http://localhost:8080  in config/profile.yaml
+#
+# The mounted settings enable the JSON API the adapter needs (SearXNG ships HTML-only by default).
+services:
+  searxng:
+    image: searxng/searxng:latest
+    container_name: schabasch-searxng
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./deploy/searxng:/etc/searxng:rw
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:8080/
+    restart: unless-stopped

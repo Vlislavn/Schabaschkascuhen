@@ -99,6 +99,24 @@ def _ensure_schema(con) -> None:
 # bge-m3 model (lazy load, cached per process)
 # ---------------------------------------------------------------------------
 
+def _cap_torch_threads(cfg: dict) -> None:
+    """Cap torch's intra-op (OpenMP) thread pool before any bge-m3 / reranker work — CAPA fix.
+
+    The features stage deadlocked: a parallel ``copy_kernel`` region driven from the background
+    tick thread, under memory pressure, lost-wakeup-hung with every thread parked in
+    ``_pthread_cond_wait`` (0% CPU, no paging — a hard deadlock, verified by `sample`). With
+    ``num_threads=1`` ``at::parallel_for`` runs inline on the caller — no OpenMP team, no condition
+    variable, so it cannot deadlock (verified). Mirrors the ``num_threads=1`` already used for
+    LightGBM in triage.py. Config ``features.torch_num_threads`` (default 1); raise on a roomy box.
+    """
+    n = int((cfg.get("features") or {}).get("torch_num_threads", 1))
+    if n <= 0:
+        return
+    import torch  # lazy: torch is only needed on the heavy stages
+    if torch.get_num_threads() != n:
+        torch.set_num_threads(n)
+
+
 def _load_model(model_name: str = "BAAI/bge-m3"):
     if model_name in _MODEL_CACHE:
         return _MODEL_CACHE[model_name]
@@ -481,6 +499,7 @@ def extract_features(cfg: dict, con, *, limit: int | None = None) -> dict[str, i
 
     Returns {"featured": n, "cached": n}.
     """
+    _cap_torch_threads(cfg)   # CAPA: avoid the OpenMP intra-op pool deadlock on the tick thread
     _ensure_schema(con)
 
     model_name = cfg.get("features", {}).get("model", "BAAI/bge-m3")
@@ -675,6 +694,7 @@ def rerank_scored(cfg: dict, con, *, top_k: int | None = None) -> dict:
     """
     from .candidate import candidate_doc as _cand_doc
 
+    _cap_torch_threads(cfg)   # CAPA: avoid the OpenMP intra-op pool deadlock on the tick thread
     _ensure_schema(con)
     reranker_name = cfg.get("features", {}).get("reranker", "BAAI/bge-reranker-v2-m3")
     k = top_k if top_k is not None else int(cfg.get("features", {}).get("rerank_top_k", 30))
@@ -682,11 +702,6 @@ def rerank_scored(cfg: dict, con, *, top_k: int | None = None) -> dict:
     cv_text = _cand_doc(con)
     if not cv_text:
         return {"reranked": 0, "skipped": "no_candidate"}
-
-    try:
-        reranker = _load_reranker(reranker_name)
-    except Exception:
-        return {"reranked": 0, "skipped": "reranker_unavailable"}
 
     # Score the FULL slate-candidate pool (SCORED + SLATED). The slate re-admits unviewed SLATED
     # jobs (UC 9a); if they aren't scored here they'd get fit=0 and be wrongly de-ranked off the
@@ -705,6 +720,32 @@ def rerank_scored(cfg: dict, con, *, top_k: int | None = None) -> dict:
 
     if not rows:
         return {"reranked": 0}
+
+    # Skip rows that already carry a fresh xenc_full — re-ranking is deterministic, so re-scoring an
+    # already-ranked job is pure waste. extract_features REPLACEs feature_json (wiping xenc) on a
+    # re-embed, so a genuine content change naturally re-enters here. If NOTHING needs (re)scoring,
+    # return WITHOUT loading the 2 GB reranker (the per-tick model load was the real cost).
+    # ONE query for the candidates' feature_json (not feature_row per-row, which re-runs _ensure_schema).
+    _ids = [r["id"] for r in rows]
+    _ph = ",".join("?" * len(_ids))
+    _fj = {row["vacancy_id"]: row["feature_json"] for row in con.execute(
+        f"SELECT vacancy_id, feature_json FROM vacancy_feature WHERE vacancy_id IN ({_ph})", _ids
+    ).fetchall()}
+
+    def _has_xenc(vid: int) -> bool:
+        try:
+            return json.loads(_fj.get(vid) or "{}").get("xenc_full") is not None
+        except (TypeError, json.JSONDecodeError):
+            return False
+
+    rows = [r for r in rows if not _has_xenc(r["id"])]
+    if not rows:
+        return {"reranked": 0, "skipped": "all_fresh"}
+
+    try:
+        reranker = _load_reranker(reranker_name)
+    except Exception:
+        return {"reranked": 0, "skipped": "reranker_unavailable"}
 
     cv = cv_text[:3000]
     pairs_full: list[list[str]] = []
@@ -738,6 +779,7 @@ def rerank_scored(cfg: dict, con, *, top_k: int | None = None) -> dict:
     elig_floor = float(e_cfg.get("floor", 0.35))
     elig_mid = float(e_cfg.get("mid", 0.6))
     elig_soft_lift = float(e_cfg.get("soft_lift_threshold", 0.55))
+    elig_soft_lift_cov_min = float(e_cfg.get("soft_lift_cov_min", 0.0))
     cand_quals = _elig.candidate_quals(load_candidate(con))   # education/years/langs (once)
 
     # One qwen client shared by HyRE, LLM-coverage, and eligibility.
@@ -826,7 +868,8 @@ def rerank_scored(cfg: dict, con, *, top_k: int | None = None) -> dict:
         if elig_on and qwen is not None:
             req = _elig.extract_requirements(con, content_hash=ch, jd_text=jd_text, client=qwen)
             eg, en, sev = _elig.eligibility_gate(req, cand_quals, floor=elig_floor, mid=elig_mid,
-                                                 fit_score=fit, soft_lift_threshold=elig_soft_lift)
+                                                 fit_score=fit, soft_lift_threshold=elig_soft_lift,
+                                                 llm_cov=llm_cov, soft_lift_cov_min=elig_soft_lift_cov_min)
             feat["elig_score"] = eg
             feat["elig_note"] = en
             feat["elig_severity"] = sev   # "structural" (red ⛔) | "soft" (amber, never sinks high-fit)
@@ -889,13 +932,21 @@ def recompute_live(con, vacancy_id: int, cfg: dict, *, cand_quals: dict | None =
         return out
     ch = _content_hash(row["title"] or "", row["description"] or "")
     jd_text = f"{row['title'] or ''}\n{row['description'] or ''}"
+    e_cfg = cfg.get("eligibility", {})
+    # deterministic JD hard-blocker (clearance / citizenship) — applies even with no extracted reqs.
+    blk = _elig.jd_hard_blocker(jd_text, e_cfg.get("hard_blockers") or [],
+                                floor=float(e_cfg.get("floor", 0.35)))
+    if blk:
+        out["elig_score"], out["elig_note"], out["elig_severity"] = blk
     req = _elig.req_from_cache(con, content_hash=ch, jd_text=jd_text)
     if req is None:
         return out
-    e_cfg = cfg.get("eligibility", {})
     eg, en, sev = _elig.eligibility_gate(
         req, cand_quals, floor=float(e_cfg.get("floor", 0.35)), mid=float(e_cfg.get("mid", 0.6)),
-        fit_score=fit, soft_lift_threshold=float(e_cfg.get("soft_lift_threshold", 0.55)))
+        fit_score=fit, soft_lift_threshold=float(e_cfg.get("soft_lift_threshold", 0.55)),
+        llm_cov=feat.get("llm_cov"), soft_lift_cov_min=float(e_cfg.get("soft_lift_cov_min", 0.0)))
+    if blk and blk[0] <= eg:
+        return out   # JD hard-blocker already set the (more severe) floor; keep it
     out["elig_score"], out["elig_note"], out["elig_severity"] = eg, en, sev
     return out
 

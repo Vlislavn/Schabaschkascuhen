@@ -477,6 +477,62 @@ def test_evaluate_with_enough_labels(con, cfg):
 # Monotone constraints shape
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Deploy gate (R1): measure-then-ship — never ship a model that fails its temporal holdout
+# ---------------------------------------------------------------------------
+
+def test_should_deploy_gate():
+    assert triage._should_deploy({"spearman_rho": 0.4}, 0.0) is True
+    assert triage._should_deploy({"spearman_rho": -0.31}, 0.0) is False   # the 2026-06-18 incident
+    assert triage._should_deploy({"spearman_rho": 0.0}, 0.0) is False     # at floor → reject
+    assert triage._should_deploy({"spearman_rho": None}, 0.0) is True     # uncomputable → don't block
+    assert triage._should_deploy({}, 0.0) is True
+    assert triage._should_deploy({"spearman_rho": float("nan")}, 0.0) is True   # uncomputable → don't block
+    assert triage._should_deploy({"spearman_rho": 0.05}, 0.1) is False    # below a custom floor
+
+
+def _seed_30_for_gate(con, prefix: str):
+    for i in range(12):
+        score = (i % 5) + 1
+        vid = _seed_described(con, f"u/{prefix}{i}", company=f"{prefix}{i}")
+        _seed_feature_row(con, vid, match_score=score / 5)
+        _seed_embedding(con, vid)
+        db.set_status(con, vid, Status.SCORED)
+        _seed_label(con, vid, score=score, source="slate")
+
+
+@pytest.mark.skipif(
+    __import__("importlib").util.find_spec("lightgbm") is None,
+    reason="lightgbm not installed"
+)
+def test_train_deploy_gate_rejects_negative_holdout(con, cfg, tmp_path, monkeypatch):
+    """The regression for the incident: a model whose TEMPORAL holdout is negative must NOT be saved
+    (the prior model/cold_start is kept). _compute_metrics is pinned so the gate decision is
+    deterministic (isolated from LightGBM's noisy tiny-data holdout)."""
+    cfg = dict(cfg, paths={**cfg["paths"], "model_dir": str(tmp_path)})
+    cfg = dict(cfg, triage={**cfg["triage"], "min_labels_to_train": 10, "deploy_min_spearman": 0.0})
+    _seed_30_for_gate(con, "gate")
+    monkeypatch.setattr(triage, "_compute_metrics", lambda *a, **k: {"spearman_rho": -0.31})
+    res = triage.train(cfg, con, force=True)
+    assert res.get("rejected") is True and not res.get("trained")
+    assert not (tmp_path / "triage.joblib").exists()   # bad model NOT shipped
+
+
+@pytest.mark.skipif(
+    __import__("importlib").util.find_spec("lightgbm") is None,
+    reason="lightgbm not installed"
+)
+def test_train_deploy_gate_ships_positive_holdout(con, cfg, tmp_path, monkeypatch):
+    """A model that PASSES its temporal holdout is deployed normally (gate doesn't block good models)."""
+    cfg = dict(cfg, paths={**cfg["paths"], "model_dir": str(tmp_path)})
+    cfg = dict(cfg, triage={**cfg["triage"], "min_labels_to_train": 10, "deploy_min_spearman": 0.0})
+    _seed_30_for_gate(con, "ship")
+    monkeypatch.setattr(triage, "_compute_metrics", lambda *a, **k: {"spearman_rho": 0.5})
+    res = triage.train(cfg, con, force=True)
+    assert res.get("trained") is True
+    assert (tmp_path / "triage.joblib").exists()
+
+
 def test_monotone_constraints_named_only():
     n = len(FEATURE_NAMES)
     mc = triage._monotone_constraints(n)

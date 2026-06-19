@@ -122,12 +122,14 @@ def judge_():
 
 
 @app.command("slate")
-def slate_cmd(date: str = typer.Option(None, "--date")):
+def slate_cmd(date: str = typer.Option(None, "--date"),
+              rebuild: bool = typer.Option(False, "--rebuild",
+                                           help="Drop today's saved slate and rebuild (apply de-dup now).")):
     """Build the slate (8 exploit + 2 explore) and print the cards."""
     from datetime import date as _date
     cfg, con = _ctx()
     d = date or _date.today().isoformat()
-    s = slate.build_slate(cfg, con, d)
+    s = slate.build_slate(cfg, con, d, rebuild=rebuild)
     _echo({"slate_date": d, "n": len(s),
            "cards": [{"rank": c["rank"], "slot": c["slot_type"], "score": c["score"],
                       "title": c["title"], "company": c["company"], "why": c["why"]} for c in s]})
@@ -155,11 +157,32 @@ def canary():
 
 
 @app.command()
-def serve():
-    """Start the local feedback page (uvicorn)."""
+def serve(dry: bool = typer.Option(False, "--dry",
+                                   help="Testing mode: log feedback instead of writing it (golden labels untouched)."),
+          no_fetch: bool = typer.Option(False, "--no-fetch",
+                                        help="Skip the retrain+fetch on startup (fast boot; use the existing slate)."),
+          quiet: bool = typer.Option(False, "--quiet",
+                                     help="Mute the rich startup/per-stage progress logging."),
+          refetch: bool = typer.Option(False, "--refetch",
+                                       help="Force a fresh fetch even if one ran within serve.refetch_after_hours.")):
+    """Start the local feedback page (uvicorn). On start it retrains + fetches (with rich console
+    progress) UNLESS a fetch ran within serve.refetch_after_hours (12h) — then the recent slate stands.
+    --dry = don't persist feedback; --no-fetch = never fetch; --refetch = force; --quiet = mute logging."""
     cfg, _ = _ctx()
     from . import feedback_app
-    feedback_app.serve(cfg)
+    feedback_app.serve(cfg, dry=dry, fetch_on_start=not no_fetch, quiet=quiet, refetch=refetch)
+
+
+@app.command()
+def enrich():
+    """Enrich today's slate cards (clean re-parse + pros/cons + company review). Loads the
+    bge-reranker — run foreground/supervised (model-heavy). Was previously only run inside a full tick."""
+    from datetime import date
+    from . import enrichment
+    cfg, con = _ctx()
+    today = date.today().isoformat()
+    slate.build_slate(cfg, con, today)   # ensure slate_entry exists for today (enrich reads it)
+    _echo(enrichment.enrich_slate(cfg, con, slate_date=today))
 
 
 @app.command("rerank")

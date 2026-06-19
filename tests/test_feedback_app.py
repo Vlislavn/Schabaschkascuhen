@@ -62,6 +62,55 @@ def test_feedback_good_writes_label(file_cfg):
     con.close()
 
 
+def test_feedback_direction_boosts_domain(file_cfg):
+    """🧭 direction: a low score removes THIS vacancy from the slate, while a positive role-fit row
+    (label_role fits=1) is the domain/direction boost signal — the 'wrong specifics, right direction' fix."""
+    con = db.connect(file_cfg["paths"]["db"])
+    vid = _seed_scored(con, "u/dir", score=4, company="SpaceCo")
+    con.close()
+    client = _client(file_cfg)
+    client.get("/")
+    r = client.post("/feedback", json={"vacancy_id": vid, "action": "direction"})
+    assert r.status_code == 200 and r.json()["ok"] is True
+    con = db.connect(file_cfg["paths"]["db"])
+    lab = con.execute("SELECT score_1_5, source FROM label WHERE vacancy_id=?", (vid,)).fetchone()
+    assert lab["score_1_5"] == 2 and lab["source"] == "slate"        # not-a-match → excluded from re-show
+    rf = con.execute("SELECT fits FROM label_role WHERE vacancy_id=? AND source='slate'", (vid,)).fetchone()
+    assert rf is not None and rf["fits"] == 1                         # positive direction signal (boost domain)
+    assert con.execute("SELECT status FROM vacancy WHERE id=?", (vid,)).fetchone()[0] == Status.LABELED.value
+    con.close()
+
+
+def test_backlog_json_returns_pool(file_cfg):
+    """/backlog.json = the judged-but-unrated pool the bot's /more walks (beyond the ≤10 daily slate)."""
+    file_cfg = {**file_cfg, "judge": {**file_cfg.get("judge", {}), "rubric_version": "v1"}}  # match _seed
+    con = db.connect(file_cfg["paths"]["db"])
+    for i in range(3):
+        _seed_scored(con, f"u/bk{i}", score=4, company=f"Bk{i}")
+    con.close()
+    r = _client(file_cfg).get("/backlog.json")
+    assert r.status_code == 200
+    body = r.json()
+    assert "cards" in body and "total" in body and body["total"] >= 3
+
+
+def test_feedback_dry_acks_but_does_not_persist(file_cfg):
+    """`serve --dry`: /feedback returns ok+dry but writes NOTHING to the label table (golden safe)."""
+    from fastapi.testclient import TestClient
+    from schabasch import feedback_app
+    con = db.connect(file_cfg["paths"]["db"])
+    vid = _seed_scored(con, "u/dry", score=5)
+    con.close()
+    client = TestClient(feedback_app.create_app(file_cfg, dry=True))
+    r = client.post("/feedback", json={"vacancy_id": vid, "action": "good", "note": "x"})
+    assert r.status_code == 200 and r.json().get("dry") is True
+    # bad action is still rejected in dry mode (validation runs before the dry short-circuit)
+    assert client.post("/feedback", json={"vacancy_id": vid, "action": "nope"}).status_code == 400
+    con = db.connect(file_cfg["paths"]["db"])
+    assert con.execute("SELECT COUNT(*) FROM label WHERE vacancy_id=?", (vid,)).fetchone()[0] == 0
+    con.close()
+
+
 def test_feedback_applied_is_flag_not_fabricated_score(file_cfg):
     """'applied' is a flag ON TOP of the score (USE_CASE), not a 5-star rating. With no prior
     rating, score_1_5 stays NULL — we never fabricate a 5 for an unrated job."""
@@ -214,6 +263,148 @@ def test_fetch_releases_lock_on_worker_error(file_cfg, monkeypatch):
         time.sleep(0.05)
 
 
+def test_refetch_guard_skips_when_fresh_fetches_when_stale(file_cfg):
+    """Startup fetch is skipped when a fetch (the 'slate' funnel stage) completed < refetch_after_hours
+    ago; runs when stale or never; --refetch forces."""
+    from datetime import datetime, timedelta, timezone
+    from schabasch import feedback_app
+    con = db.connect(file_cfg["paths"]["db"])
+    cfg = dict(file_cfg)
+    cfg["serve"] = {"refetch_after_hours": 12}
+
+    assert feedback_app._refetch_guard(con, cfg, force=False)[0] is False   # never fetched → fetch
+
+    def _log_slate(hours_ago):
+        ts = (datetime.now(timezone.utc) - timedelta(hours=hours_ago)).isoformat(timespec="seconds")
+        con.execute("INSERT INTO funnel_log (run_at, stage, count) VALUES (?,?,?)", (ts, "slate", 9))
+        con.commit()
+
+    _log_slate(1)                                                            # fresh (1h ago)
+    skip, msg = feedback_app._refetch_guard(con, cfg, force=False)
+    assert skip is True and "skipping startup fetch" in msg
+    assert feedback_app._refetch_guard(con, cfg, force=True)[0] is False     # --refetch overrides
+
+    con.execute("DELETE FROM funnel_log")                                    # only a stale entry remains
+    con.commit()
+    _log_slate(20)                                                           # last fetch 20h ago → stale
+    assert feedback_app._refetch_guard(con, cfg, force=False)[0] is False
+    con.close()
+
+
+def test_fetch_status_and_index_surface_skipped_refetch(file_cfg):
+    """When the startup fetch was skipped (data fresh), /fetch-status exposes it and the index page
+    shows the 'data not updated — refetch?' alert."""
+    import schabasch.feedback_app as fa
+    from tests.conftest import seed_scored
+    con = db.connect(file_cfg["paths"]["db"])
+    seed_scored(con, "u/x", score=5, company="Co")
+    con.close()
+    fa._FETCH_STATE.update(fetch_skipped=True, data_age_hours=3.0)
+    try:
+        client = _client(file_cfg)
+        st = client.get("/fetch-status").json()
+        assert st["fetch_skipped"] is True and st["data_age_hours"] == 3.0
+        html = client.get("/").text
+        assert "не обновлялись" in html and "обновления" in html      # staleness + refetch hint
+    finally:
+        fa._FETCH_STATE.update(fetch_skipped=False, data_age_hours=None)
+
+
+def test_role_feedback_writes_sidecar(file_cfg):
+    """POST /role-feedback classifies the role server-side and records it in label_role (golden)."""
+    from tests.conftest import seed_scored
+    from schabasch import role_feedback
+    con = db.connect(file_cfg["paths"]["db"])
+    vid = seed_scored(con, "u/role", score=4, company="Co", title="Senior Software Engineer")
+    con.close()
+    r = _client(file_cfg).post("/role-feedback", json={"vacancy_id": vid, "fits": False})
+    assert r.status_code == 200 and r.json()["ok"] is True
+    assert r.json()["role_kind"] == "hands_on_engineer"   # classified server-side
+    con = db.connect(file_cfg["paths"]["db"])
+    assert role_feedback.veto_map(con).get(vid) == 0      # wrong role recorded
+    con.close()
+
+
+def test_feedback_note_abgelaufen_expires(file_cfg):
+    """5b: a note flagging the posting as expired EXPIRES it (hard removal), even with a 👍."""
+    con = db.connect(file_cfg["paths"]["db"])
+    vid = _seed_scored(con, "u/exp", score=4)
+    con.close()
+    r = _client(file_cfg).post("/feedback", json={
+        "vacancy_id": vid, "action": "good",
+        "note": "Diese Stellenanzeige ist auf Indeed abgelaufen, не могу податься"})
+    assert r.status_code == 200 and r.json()["ok"] is True
+    con = db.connect(file_cfg["paths"]["db"])
+    st = con.execute("SELECT status FROM vacancy WHERE id=?", (vid,)).fetchone()[0]
+    con.close()
+    assert st == Status.EXPIRED.value
+
+
+def test_feedback_note_no_false_expire(file_cfg):
+    """A non-expiry note (false-positive guard) leaves the vacancy LABELED, not EXPIRED."""
+    con = db.connect(file_cfg["paths"]["db"])
+    vid = _seed_scored(con, "u/keepexp", score=2)
+    con.close()
+    r = _client(file_cfg).post("/feedback", json={
+        "vacancy_id": vid, "action": "bad", "note": "salt water, an alternative role"})
+    assert r.status_code == 200
+    con = db.connect(file_cfg["paths"]["db"])
+    st = con.execute("SELECT status FROM vacancy WHERE id=?", (vid,)).fetchone()[0]
+    con.close()
+    assert st == Status.LABELED.value
+
+
+def test_role_feedback_dry_does_not_persist(file_cfg):
+    """--dry: role feedback is acked but NOT written (same firewall as /feedback)."""
+    from fastapi.testclient import TestClient
+    from schabasch import feedback_app, role_feedback
+    from tests.conftest import seed_scored
+    con = db.connect(file_cfg["paths"]["db"])
+    vid = seed_scored(con, "u/roledry", score=4, company="Co", title="Backend Engineer")
+    con.close()
+    r = TestClient(feedback_app.create_app(file_cfg, dry=True)).post(
+        "/role-feedback", json={"vacancy_id": vid, "fits": False})
+    assert r.status_code == 200 and r.json().get("dry") is True
+    con = db.connect(file_cfg["paths"]["db"])
+    assert role_feedback.veto_map(con) == {}              # nothing persisted
+    con.close()
+
+
+def test_role_feedback_unknown_vacancy_404(file_cfg):
+    assert _client(file_cfg).post("/role-feedback", json={"vacancy_id": 999999, "fits": True}).status_code == 404
+
+
+def test_startup_pipeline_retrains_fetches_then_progresses(file_cfg, monkeypatch):
+    """serve-start orchestration (heavy stages mocked): retrain → fetch core (run_investigate=False)
+    → flip slate_ready after the seed → investigate the rest top→down → release the lock."""
+    import schabasch.feedback_app as fa
+    import schabasch.investigate as inv
+    import schabasch.pipeline as pipe
+    import schabasch.slate as sl
+    import schabasch.triage as tri
+    calls = {"retrain": 0, "tick_kwargs": None, "investigated": []}
+    monkeypatch.setattr(tri, "retrain_checkpointed",
+                        lambda cfg, con: calls.update(retrain=calls["retrain"] + 1) or {"skipped": True})
+    monkeypatch.setattr(pipe, "nightly_tick",
+                        lambda cfg, con, **kw: calls.update(tick_kwargs=kw) or {"date": "d", "slate": {"size": 4}})
+    monkeypatch.setattr(sl, "build_slate", lambda cfg, con, d: [{"vacancy_id": v} for v in (10, 11, 12, 13)])
+    monkeypatch.setattr(inv, "investigate_one", lambda cfg, con, vid: calls["investigated"].append(vid) or "ok")
+    monkeypatch.setattr(fa.memory_guard, "require_headroom", lambda *a, **k: None)
+    monkeypatch.setattr(fa.memory_guard, "start_watchdog", lambda: None)
+    monkeypatch.setattr(fa.memory_guard, "configure_from_cfg", lambda cfg: None)
+    fa._FETCH_STATE.update(slate_ready=False, running=False)
+
+    fa._run_startup_pipeline(file_cfg, seed=2)
+
+    assert calls["retrain"] == 1                                # retrained (checkpointed) on start
+    assert calls["tick_kwargs"]["run_investigate"] is False     # fetch core only; agent batch deferred
+    assert calls["investigated"] == [10, 11, 12, 13]            # seed-2 + the rest, top→down
+    assert fa._FETCH_STATE["slate_ready"] is True               # greet trigger flipped
+    assert fa._FETCH_STATE["running"] is False                  # finished
+    assert fa._FETCH_LOCK.acquire(blocking=False)               # lock released (not wedged)
+    fa._FETCH_LOCK.release()
+
+
 def test_funnel_surfaces_dedup(file_cfg):
     """/funnel parses the latest dedup_fuzzy funnel detail into a visible candidate list."""
     con = db.connect(file_cfg["paths"]["db"])
@@ -223,6 +414,21 @@ def test_funnel_surfaces_dedup(file_cfg):
     body = _client(file_cfg).get("/funnel").json()
     assert body["dedup_count"] == 2 and len(body["dedup_candidates"]) == 1
     assert body["dedup_candidates"][0]["sim"] == 100.0
+
+
+def test_slate_json_returns_serializable_cards(file_cfg):
+    """/slate.json returns today's slate as JSON (the Telegram bot's only read) — same cards as the
+    HTML index, must JSON-serialize (the default=float shim handles any numpy fit_score).
+    Uses conftest.seed_scored (rubric matches the cfg, so cards actually land in build_slate)."""
+    from tests.conftest import seed_scored
+    con = db.connect(file_cfg["paths"]["db"])
+    vids = [seed_scored(con, f"u/json{i}", score=5, company=f"Co{i}") for i in range(3)]
+    con.close()
+    r = _client(file_cfg).get("/slate.json")
+    assert r.status_code == 200
+    body = r.json()                       # would raise if the response weren't valid JSON
+    assert isinstance(body, list) and body
+    assert set(c["vacancy_id"] for c in body) & set(vids)
 
 
 def test_funnel_endpoint(file_cfg):

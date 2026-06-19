@@ -1,0 +1,10 @@
+# Minimal SearXNG settings for local keyless use — enables the JSON API the browsing.search adapter
+# needs (SearXNG ships HTML-only by default). Local-only; change the secret_key if exposing it.
+use_default_settings: true
+server:
+  secret_key: "schabasch-local-only-change-me"
+  limiter: false
+search:
+  formats:
+    - html
+    - json

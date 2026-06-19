@@ -51,12 +51,37 @@ def classify(title: str | None, summary: str | None = None) -> str:
     return ""
 
 
-def multiplier(kind: str, cfg: dict | None = None) -> float:
-    """Multiplicative down-rank factor for the slate effective score (1.0 = no change)."""
+def multiplier(kind: str, cfg: dict | None = None, con=None) -> float:
+    """Multiplicative down-rank factor for the slate effective score (1.0 = no change).
+
+    Default: the static `role_kind_mult` table (config) over `_DEFAULT_MULT`. When P2 learning is
+    enabled (`slate.role_kind_learn.enabled`) AND `con` is supplied AND ≥ n_min golden role-fit votes
+    exist for this kind, the factor is the **Beta-smoothed empirical role-fit rate** from `label_role`
+    instead of the hardcoded constant — so a kind the user keeps tagging '🙅 wrong role' sinks toward
+    `mult_floor` from data, not a magic number. Below n_min it falls back to the static value
+    (graceful, behaviour-preserving). con=None or learning-off ⇒ exactly today's behaviour."""
     table = dict(_DEFAULT_MULT)
     if cfg:
         table.update((cfg.get("slate", {}) or {}).get("role_kind_mult", {}) or {})
-    return float(table.get(kind, 1.0))
+    default = float(table.get(kind, 1.0))
+    learn = ((cfg or {}).get("slate", {}) or {}).get("role_kind_learn", {}) or {}
+    if con is None or not learn.get("enabled"):
+        return default
+    return _learned_multiplier(kind, default, learn, con)
+
+
+def _learned_multiplier(kind: str, default: float, learn: dict, con) -> float:
+    from . import role_feedback   # local import: avoid a cycle (role_feedback → db only)
+    n_min = int(learn.get("n_min", 5))
+    alpha = float(learn.get("alpha", 3.0))
+    floor = float(learn.get("mult_floor", 0.5))
+    n, fits = role_feedback.fit_counts(con, source="slate").get(kind, (0, 0))
+    if n < n_min:
+        return default                      # starved → the documented static fallback
+    # prior anchored so a kind whose votes match the prior reproduces `default` (continuity at n_min).
+    prior_p = (default - floor) / (1.0 - floor) if floor < 1.0 else 1.0
+    p_fit = (fits + alpha * prior_p) / (n + alpha)        # Beta / α-shrink to the prior
+    return floor + (1.0 - floor) * max(0.0, min(1.0, p_fit))
 
 
 def flag(kind: str) -> str:

@@ -83,6 +83,16 @@ def build_agent(cfg: dict, *, system_prompt: str, max_turns: int | None = None) 
     if max_turns is not None:
         a_cfg["max_turns"] = max_turns
 
+    # KEYLESS, config-driven search backend for the agent's WebSearchTool. kl supports searx/ddg/tavily;
+    # we NEVER default to tavily (the user supplies no API keys). A self-hosted SearXNG (browsing.
+    # searxng_url) wins when set (multi-engine, robust); otherwise keyless DuckDuckGo. Deterministic
+    # (explicit backend) so a stray TAVILY_API_KEY in the env can't silently select a keyed backend.
+    b_cfg = cfg.get("browsing") or {}
+    searxng_url = b_cfg.get("searxng_url")
+    if searxng_url:
+        os.environ["SEARXNG_URL"] = str(searxng_url)
+    search_backend = b_cfg.get("search_backend") or ("searx" if searxng_url else "ddg")
+
     # Role-routed model (llm.roles.agent) — defaults to local ollama qwen3:8b, but can be pointed at
     # the local 35B MLX server or api.kather.ai `sota` to fix qwen3:8b's max-turn exhaustion on ReAct.
     from .llm_clients import agent_client_params
@@ -113,7 +123,7 @@ def build_agent(cfg: dict, *, system_prompt: str, max_turns: int | None = None) 
         executor=executor,
         system_prompt=system_prompt,
         tools=[
-            WebSearchTool(timeout_seconds=15.0),
+            WebSearchTool(timeout_seconds=15.0, backend=search_backend),   # keyless (ddg/searx)
             WebFetchTool(timeout_seconds=20.0),
         ],
         max_turns=int(a_cfg["max_turns"]),

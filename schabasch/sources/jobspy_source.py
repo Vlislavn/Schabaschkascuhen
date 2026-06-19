@@ -10,7 +10,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from .. import db
+from .. import db, freshness
 from ..models import CanaryVerdict
 
 # Между LinkedIn-запросами (страховка поверх встроенного пейсинга jobspy ~0.64 req/s).
@@ -92,22 +92,37 @@ def scrape(cfg: dict, con, *, queries: list[str] | None = None,
     if hours_old is None:
         hours_old = search.get("hours_old")
     results_wanted = int(search.get("results_wanted", 25))
+    # CLIENT-SIDE date gate: jobspy passes hours_old to the boards but does no client-side check, so
+    # a re-indexed older posting slips through. Drop anything older than the window by its real
+    # date_posted; null/unparseable (LinkedIn, ~half of Indeed) passes (freshness.too_old).
+    max_age = freshness.max_post_age_days(cfg)
 
     inserted: dict[str, int] = {}
     for source in sources:
         sleep_s = LINKEDIN_SLEEP_S if source == "linkedin" else INDEED_SLEEP_S
+        # ECONOMY (opt-in): a tighter LinkedIn window (search.linkedin_hours_old, e.g. 24) fetches
+        # fewer/fresher jobs → fewer inline description fetches → ~halves the LinkedIn long pole, and
+        # aligns with the recency re-rank. Default = the global hours_old (no change). NOTE: the
+        # list-first + keyless-extract economy was REJECTED — LinkedIn bot-walls keyless extraction, so
+        # dropping jobspy's inline description fetch would lose LinkedIn descriptions (CHANGELOG).
+        src_hours = (int(search["linkedin_hours_old"]) if source == "linkedin"
+                     and search.get("linkedin_hours_old") is not None else hours_old)
         consec_fail = 0
         count = 0
+        stale_skipped = 0
         pairs = [(t, c) for t in queries for c in cities]
         for i, (term, city) in enumerate(pairs):
             res, exc = _scrape_one(source, term, city, results_wanted=results_wanted,
-                                   hours_old=hours_old)
+                                   hours_old=src_hours)
             rows = 0
             if not exc and not isinstance(res, int):
                 df = res
                 for rec in df.to_dict("records"):
                     vac = _row_to_vacancy(source, rec, term, city)
                     if not vac["url"] or vac["url"].lower() == "nan":
+                        continue
+                    if freshness.too_old(vac["date_posted"], max_age):
+                        stale_skipped += 1
                         continue
                     db.upsert_vacancy(con, vac)
                     rows += 1
@@ -127,6 +142,9 @@ def scrape(cfg: dict, con, *, queries: list[str] | None = None,
             if i < len(pairs) - 1:
                 time.sleep(sleep_s)
         inserted[source] = count
+        if stale_skipped:
+            db.log_funnel(con, "ingest_stale_skip", stale_skipped, source,
+                          detail=f"older than {max_age}d by date_posted")
         db.log_funnel(con, "scrape", count, source)
     return inserted
 

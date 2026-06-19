@@ -40,8 +40,15 @@ log = logging.getLogger("schabasch.memory_guard")
 _SOFT_FLOOR_PCT_DEFAULT = 20  # warn: heavy work will start failing soon
 _HARD_FLOOR_PCT_DEFAULT = 10  # refuse new heavy work (bench kill floor is 12)
 _WATCHDOG_INTERVAL_SECONDS_DEFAULT = 15.0
+# Swap GROWTH-delta floor (MB gained between two watchdog samples) that flags memory pressure.
+# CAPA: the features stage deadlocked at 86% swap while macOS free-RAM% read a healthy 84% — the
+# free%-only signal is blind to compressor/swap saturation. Per the project doctrine ("free% +
+# growth-delta, never ABSOLUTE swap") a rapidly-GROWING swap is the leading indicator the free%
+# floor misses. Env SCHABASCH_MEMORY_SWAP_GROWTH_MB; config memory.swap_growth_floor_mb; 0 = off.
+_SWAP_GROWTH_FLOOR_MB_DEFAULT = 512
 
 _MEMORY_PRESSURE_RE = re.compile(r"free percentage: (\d+)%")
+_SWAP_USED_RE = re.compile(r"used\s*=\s*([\d.]+)M")
 
 _state_lock = threading.Lock()
 _memory_critical = False
@@ -79,6 +86,7 @@ def configure_from_cfg(cfg: dict) -> None:
         "SCHABASCH_MEMORY_HARD_FLOOR_PCT": mem.get("hard_floor_pct"),
         "SCHABASCH_MEMORY_SOFT_FLOOR_PCT": mem.get("soft_floor_pct"),
         "SCHABASCH_MEMORY_GUARD_INTERVAL_SECONDS": mem.get("watchdog_interval_seconds"),
+        "SCHABASCH_MEMORY_SWAP_GROWTH_MB": mem.get("swap_growth_floor_mb"),
     }
     for env_name, value in pairs.items():
         if value is not None and env_name not in os.environ:
@@ -114,6 +122,32 @@ def _system_free_pct() -> float | None:
             log.warning("memory_guard probe unavailable (%s: %s); guards degrade to no-ops",
                         type(exc).__name__, exc)
         return None
+
+
+def _swap_used_mb() -> float | None:
+    """Swap currently in use (MB) on darwin via ``sysctl -n vm.swapusage``; ``None`` elsewhere/on
+    probe failure. Used ONLY for a growth-delta (see ``_swap_growth_exceeded``) — never as an
+    absolute floor (absolute swap is not a trustworthy macOS signal)."""
+    try:
+        if os.uname().sysname != "Darwin":
+            return None
+        out = subprocess.run(
+            ["sysctl", "-n", "vm.swapusage"], capture_output=True, text=True, timeout=5, check=True
+        ).stdout
+        match = _SWAP_USED_RE.search(out)
+        return float(match.group(1)) if match else None
+    except (subprocess.SubprocessError, OSError, ValueError):
+        return None
+
+
+def _swap_growth_exceeded(prev_mb: float | None, cur_mb: float | None, floor_mb: int) -> bool:
+    """True when swap GREW by more than ``floor_mb`` since the previous sample (``floor_mb`` <= 0 =
+    off). Growth-delta — not the absolute level — is the trustworthy macOS swap-pressure signal: the
+    OS keeps free-RAM% high while compressing/swapping hard, so a rapidly-growing swap is the leading
+    indicator the free% floor misses (CAPA: the features deadlock fired at 86% swap / 84% free)."""
+    if floor_mb <= 0 or prev_mb is None or cur_mb is None:
+        return False
+    return (cur_mb - prev_mb) > floor_mb
 
 
 def snapshot() -> MemorySnapshot:
@@ -173,12 +207,21 @@ def _watchdog_loop(interval_seconds: float, on_critical: "Callable[[MemorySnapsh
     global _memory_critical, _memory_pressured
     hard_floor = _env_int("SCHABASCH_MEMORY_HARD_FLOOR_PCT", _HARD_FLOOR_PCT_DEFAULT)
     soft_floor = _env_int("SCHABASCH_MEMORY_SOFT_FLOOR_PCT", _SOFT_FLOOR_PCT_DEFAULT)
+    swap_floor = _env_int("SCHABASCH_MEMORY_SWAP_GROWTH_MB", _SWAP_GROWTH_FLOOR_MB_DEFAULT)
     soft_warned = False
+    prev_swap: float | None = None
     while True:
         free = _system_free_pct()
+        cur_swap = _swap_used_mb()
+        swap_growing = _swap_growth_exceeded(prev_swap, cur_swap, swap_floor)
+        prev_swap = cur_swap
         if free is not None:
             with _state_lock:
-                _memory_pressured = free < soft_floor
+                _memory_pressured = (free < soft_floor) or swap_growing   # CAPA: free% is swap-blind
+            if swap_growing:
+                log.warning("memory_guard: swap grew >%dMB/sample (now %.0fMB) — flagging memory "
+                            "pressure; macOS free-RAM%% (%.0f%%) is blind to swap saturation",
+                            swap_floor, cur_swap or 0.0, free)
             if free < hard_floor:
                 with _state_lock:
                     entered_critical = not _memory_critical

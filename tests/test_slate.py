@@ -20,6 +20,34 @@ def test_slate_size_8_plus_2(cfg, con):
     assert len(s) == 10
 
 
+def test_effective_score_zero_cov_floor():
+    """0%-skill floor: a job with llm_cov==0 is multiplied down when zero_cov_mult<1; cov=None is never floored."""
+    base = {"fit_score": 0.8, "llm_cov": 0.0, "score": 5, "elig_score": 1.0, "title": "Analyst", "summary": ""}
+    assert slate.effective_score(base, {"slate": {"zero_cov_mult": 1.0}}) > 0      # off
+    assert slate.effective_score(base, {"slate": {"zero_cov_mult": 0.0}}) == 0.0   # floored
+    nocov = dict(base, llm_cov=None)
+    assert slate.effective_score(nocov, {"slate": {"zero_cov_mult": 0.0}}) > 0     # uncomputed → not floored
+
+
+def test_slate_card_carries_role_kind(cfg, con):
+    """Cards expose role_kind so the bot can ask the role-fit follow-up on ambiguous roles."""
+    eng = seed_scored(con, "u/eng", score=4, company="A", title="Senior Software Engineer")
+    s = slate.build_slate(cfg, con, "2026-06-13", rebuild=True)
+    card = next(c for c in s if c["vacancy_id"] == eng)
+    assert card["role_kind"] == "hands_on_engineer"
+
+
+def test_slate_excludes_already_rated(cfg, con):
+    """De-dup: a vacancy the user already RATED is never re-served on the daily slate; a fresh
+    unrated one is. (rebuild=True so the change applies to an existing slate_date.)"""
+    from schabasch import db
+    rated = seed_scored(con, "u/rated", score=5, company="A")
+    fresh = seed_scored(con, "u/fresh", score=5, company="B")
+    db.insert_label(con, rated, {"score_1_5": 4, "applied": 0, "source": "slate"})
+    ids = [c["vacancy_id"] for c in slate.build_slate(cfg, con, "2026-06-13", rebuild=True)]
+    assert fresh in ids and rated not in ids
+
+
 def test_company_cap_max_3(cfg, con):
     # 10 вакансий одной компании с высокой оценкой → в exploit максимум 3
     for i in range(10):
@@ -104,7 +132,7 @@ def test_slate_card_shows_posting_date(cfg, con):
     s = slate.build_slate(cfg, con, "2026-06-13")
     assert any(x["vacancy_id"] == vid and x.get("date_posted") == "2020-01-01" for x in s)
     html = slate.render_html(s, "2026-06-13")
-    assert "posted" in html  # posting age surfaced on the card
+    assert "freshbadge" in html  # posting age surfaced via the freshness badge by the title
 
 
 def test_slate_card_shows_company_research(cfg, con):
@@ -268,6 +296,82 @@ def test_soft_eligibility_renders_amber_not_red(cfg, con):
     assert '<div class="alert">⛔' not in html   # soft → never the red STOP alert
 
 
+# ---------------------------------------------------------------------------
+# Freshness re-rank (recent on top) + accent posting-date badge
+# ---------------------------------------------------------------------------
+
+def test_recency_mult_off_by_default_decays_when_on():
+    """recency_mult: floor 1.0 (absent/default) = OFF (==1.0 any age); when on it decays
+    today→1.0 > halflife > old→floor, never below floor, and clamps negative days to fresh."""
+    off = {"slate": {}}
+    assert slate._recency_mult(0, off) == 1.0 and slate._recency_mult(99, off) == 1.0
+    on = {"slate": {"recency_floor": 0.6, "recency_halflife_days": 7}}
+    assert slate._recency_mult(0, on) == 1.0                       # today = full weight
+    assert abs(slate._recency_mult(7, on) - 0.8) < 1e-9            # one halflife → midway to floor
+    assert slate._recency_mult(0, on) > slate._recency_mult(7, on) > slate._recency_mult(60, on)
+    assert slate._recency_mult(10_000, on) >= 0.6                  # never below floor
+    assert slate._recency_mult(-5, on) == 1.0                      # negative days clamped to fresh
+
+
+def _seed_fit_dated(con, url, fit, date_posted):
+    """A scored vacancy with a live fit (fit_hyre + bge-m3 sparse → fit_eff==fit) and a posting date."""
+    import json
+    vid = seed_scored(con, url, score=5, company=url, title=f"Role {url}")
+    feat = {"match_score": fit, "fit_score": fit, "fit_hyre": fit, "bgem3_sparse": fit * 0.45,
+            "elig_score": 1.0}
+    con.execute("INSERT OR REPLACE INTO vacancy_feature (vacancy_id, match_score, feature_json,"
+                " computed_at) VALUES (?,?,?,datetime('now'))", (vid, fit, json.dumps(feat)))
+    con.execute("UPDATE vacancy SET date_posted=? WHERE id=?", (date_posted, vid))
+    con.commit()
+    return vid
+
+
+def test_recency_rerank_fresh_outranks_stale_great(cfg, con):
+    """The user's "recent on top": a FRESH slightly-worse job outranks a STALE great one in slate
+    order (recency reorders _eff). quality_floor still gates on pure _eff so both stay in exploit."""
+    from datetime import datetime, timezone, timedelta
+    from schabasch import features
+    cfg = dict(cfg); cfg["slate"] = dict(cfg["slate"])
+    cfg["slate"]["recency_floor"] = 0.6; cfg["slate"]["recency_halflife_days"] = 7
+    cfg["features"] = dict(cfg["features"]); cfg["features"]["fit_weights"] = {"hyre": 0.7, "sparse": 0.3}
+    features._ensure_schema(con)
+    old = (datetime.now(timezone.utc) - timedelta(days=14)).date().isoformat()
+    today = datetime.now(timezone.utc).date().isoformat()
+    stale_great = _seed_fit_dated(con, "great", 0.90, old)    # _eff .90 × recency(14d)≈.70 → rank ≈.63
+    fresh_good = _seed_fit_dated(con, "good", 0.72, today)    # _eff .72 × recency(0d)=1.0  → rank ≈.72
+    order = [x["vacancy_id"] for x in slate.build_slate(cfg, con, "2026-06-13", rebuild=True)]
+    assert order.index(fresh_good) < order.index(stale_great)
+
+
+def test_recency_off_keeps_quality_order(cfg, con):
+    """Behaviour-preserving: with recency OFF (floor 1.0, the default) the great job leads again —
+    proves the re-rank, not some other change, is what moved the fresh one up."""
+    from datetime import datetime, timezone, timedelta
+    from schabasch import features
+    cfg = dict(cfg); cfg["slate"] = dict(cfg["slate"]); cfg["slate"]["recency_floor"] = 1.0
+    cfg["features"] = dict(cfg["features"]); cfg["features"]["fit_weights"] = {"hyre": 0.7, "sparse": 0.3}
+    features._ensure_schema(con)
+    old = (datetime.now(timezone.utc) - timedelta(days=14)).date().isoformat()
+    today = datetime.now(timezone.utc).date().isoformat()
+    stale_great = _seed_fit_dated(con, "great", 0.90, old)
+    fresh_good = _seed_fit_dated(con, "good", 0.72, today)
+    order = [x["vacancy_id"] for x in slate.build_slate(cfg, con, "2026-06-13", rebuild=True)]
+    assert order.index(stale_great) < order.index(fresh_good)
+
+
+def test_fresh_card_shows_accent_badge(cfg, con):
+    """A ≤2-day job renders the accent freshness badge by the title; the old muted gray .posted
+    date no longer sits in the .meta2 line (laws-of-UX subtract-before-add)."""
+    from datetime import datetime, timezone
+    vid = seed_scored(con, "u/fresh", score=5, company="Co")
+    con.execute("UPDATE vacancy SET date_posted=? WHERE id=?",
+                (datetime.now(timezone.utc).date().isoformat(), vid))
+    con.commit()
+    html = slate.render_html(slate.build_slate(cfg, con, "2026-06-13"), "2026-06-13")
+    assert "freshbadge fresh" in html        # accent badge for today's posting
+    assert 'class="posted"' not in html      # the old gray meta date is gone
+
+
 def test_bilingual_toggle_en_default_ru_on_request(cfg, con):
     """English by default; ?lang=ru flips the UI to Russian; both keep «шабашка» + the toggle."""
     _seed_many(con, 6)
@@ -278,3 +382,35 @@ def test_bilingual_toggle_en_default_ru_on_request(cfg, con):
     assert '<html lang="ru"' in ru and "офисная мышь" in ru and "разметить ещё ↗" in ru
     assert "шабашка" in en and "шабашка" in ru             # signature term kept in both
     assert "langsw" in en and 'href="?lang=ru"' in en      # toggle to Russian present on the EN page
+
+
+def test_recent_reject_penalty(cfg, con):
+    """5c: ≥2 recent score-≤2 labels of a role_kind → a sub-1.0 demotion multiplier for that kind;
+    neutral (analyst/manager) kinds never penalised; disabled (days=0) returns {}."""
+    import json
+    from schabasch import db
+    from schabasch.models import Status
+    cfg = dict(cfg)
+    cfg["slate"] = dict(cfg["slate"], pref_penalty_days=7, pref_penalty_floor=0.3)
+
+    def seed_label(url, title, score):
+        vid = db.upsert_vacancy(con, {"source": "linkedin", "url": url, "title": title,
+                                      "company": "C", "city": "F", "description": "x" * 100})
+        db.set_status(con, vid, Status.SCORED, card_json=json.dumps({"summary_2lines": "a\nb"}))
+        db.insert_label(con, vid, {"score_1_5": score, "source": "slate"})
+        return vid
+
+    seed_label("l/e1", "Software Engineer", 2)
+    seed_label("l/e2", "Backend Engineer", 2)            # 2 engineer rejections → penalised
+    seed_label("l/a1", "Business Analyst", 4)            # neutral kind, liked → no entry
+
+    pen = slate.recent_reject_penalty(con, cfg)
+    assert "hands_on_engineer" in pen and pen["hands_on_engineer"] == 0.3   # all-reject → floor
+    assert "" not in pen                                  # neutral analyst kind never penalised
+
+    # a single rejection is below the ≥2 noise guard → no penalty for that kind
+    seed_label("l/j1", "Werkstudent (m/w/d)", 2)
+    assert "junior" not in slate.recent_reject_penalty(con, cfg)
+
+    cfg["slate"]["pref_penalty_days"] = 0                 # disabled → off
+    assert slate.recent_reject_penalty(con, cfg) == {}

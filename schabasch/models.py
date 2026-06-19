@@ -59,8 +59,9 @@ class CanaryVerdict(str, enum.Enum):
     EMPTY_MARKET = "empty_market"    # канарейка жива, но рынок пуст по матрице
 
 
-# Кнопки slate → единая шкала (👎=2, 👍=4, ⭐=5; applied — флаг поверх).
-FEEDBACK_TO_SCORE = {"bad": 2, "good": 4, "star": 5}
+# Кнопки slate → единая шкала (👎=2, 👍=4, ⭐=5; applied — флаг поверх; direction=2 «не эта вакансия,
+# но направление интересно» — низкий score убирает из показа, плюс отдельный role-fit=1 буст домена).
+FEEDBACK_TO_SCORE = {"bad": 2, "good": 4, "star": 5, "direction": 2}
 
 WHY_TAGS = [
     # magnets — profile-specific aspirational domains (USE_CASE.md)

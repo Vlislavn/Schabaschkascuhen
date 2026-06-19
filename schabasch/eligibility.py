@@ -235,7 +235,8 @@ _LANG_ALIASES = {"german": "de", "deutsch": "de", "de": "de",
 
 
 def eligibility_gate(req: dict, cand: dict, *, floor: float = 0.35, mid: float = 0.6,
-                     fit_score: float | None = None, soft_lift_threshold: float = 0.55
+                     fit_score: float | None = None, soft_lift_threshold: float = 0.55,
+                     llm_cov: float | None = None, soft_lift_cov_min: float = 0.0
                      ) -> tuple[float, str, str]:
     """Return (multiplier ∈ [floor, 1.0], human_reason, severity). 1.0 = eligible / unknown.
     severity ∈ {"structural","soft"} — STRUCTURAL (PhD/doctoral position, hard non-EN language) is a
@@ -277,7 +278,12 @@ def eligibility_gate(req: dict, cand: dict, *, floor: float = 0.35, mid: float =
                 factors.append((mid, reason, "structural"))   # 2-step gap → red ⛔, not liftable
             else:
                 soft_mult = mid
-                if fit_score is not None and float(fit_score) >= soft_lift_threshold:
+                # HIGH-FIT lift, GATED on honest coverage: only lift the soft degree gap when fit is
+                # high AND (when known) the per-requirement coverage llm_cov clears soft_lift_cov_min.
+                # Without the cov gate an aspiration-magnet job (high semantic fit, ~0 real coverage,
+                # e.g. VINFAST ML-Engineer fit 0.76 / cov 0.12) gets its master gap wrongly lifted.
+                cov_ok = llm_cov is None or float(llm_cov) >= soft_lift_cov_min
+                if fit_score is not None and float(fit_score) >= soft_lift_threshold and cov_ok:
                     soft_mult = 1.0   # high-fit lift: don't sink a 1-step job the user would apply to (SCHOTT)
                 factors.append((soft_mult, reason, "soft"))
 
@@ -296,3 +302,19 @@ def eligibility_gate(req: dict, cand: dict, *, floor: float = 0.35, mid: float =
         return 1.0, "", "structural"
     factors.sort(key=lambda x: x[0])
     return factors[0]
+
+
+def jd_hard_blocker(jd_text: str, patterns, *, floor: float = 0.35) -> tuple[float, str, str] | None:
+    """Deterministic STRUCTURAL blocker straight from the JD text — for hard LEGAL barriers the
+    candidate cannot satisfy (active US security clearance / TS-SCI, US-citizenship-only, etc.). These
+    don't come through the qwen requirement extractor and are 0% skill-matchable, yet they topped the
+    slate via the domain magnet. `patterns` = config `eligibility.hard_blockers` (regex list); EMPTY =
+    OFF (behaviour-preserving). Returns (floor, reason, 'structural') on the first match, else None."""
+    for pat in patterns or ():
+        try:
+            m = re.search(pat, jd_text or "", re.IGNORECASE)
+        except re.error:
+            continue   # a malformed config pattern must not crash the gate
+        if m:
+            return (floor, f"жёсткий барьер: {m.group(0)}", "structural")
+    return None

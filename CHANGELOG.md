@@ -5,6 +5,186 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Triage gate: ship only a model that beats its forward test; out of the slate ranking (2026-06-18)
+`/eval` showed triage at 42% / −0.14 (worse than a coin-flip). Investigation (receipts): the model's
+OWN temporal holdout is negative (saved artifact `spearman_rho −0.31`) yet `train()` saved + served it
+anyway, and the eval row was computed over a 2/3-cold_start stored-score sediment (random-CV flatters
+it to +0.39; the temporal split is the honest forward read). Fixes: **(R1)** NEW deploy gate
+`triage._should_deploy` — `train()` KEEPS the prior model rather than overwrite it with one whose
+temporal-holdout spearman ≤ `triage.deploy_min_spearman` (default 0.0; NaN/None = uncomputable → don't
+block, only a measured failure rejects). **(R2)** triage REMOVED from the slate sort tie-break
+(`slate.build_slate`) — it's a drop-filter, not a ranker; fit-led order unchanged. **(R3)** the `/eval`
+triage row now measures ONLY actual ML decisions (`model_version != 'cold_start'`), relabeled
+"ML-гейт (triage, drop-фильтр)", omitted when <10 ML-scored — so it reads as honest gate-health
+(≈random) instead of a broken-matcher number. Tests: `test_should_deploy_gate` + deploy-gate
+reject/ship end-to-end.
+
+### Stale & expired vacancies kept off the slate (2026-06-18)
+The morning slate carried expired Indeed jobs + a 14-month-old Arbeitsagentur posting. Fixes:
+(1) NEW `freshness.too_old` + an INGESTION date gate (`search.max_post_age_days`, default
+`ceil(hours_old/24)`) drops a posting older than the window in `arbeitsagentur.search` /
+`jobspy_source.scrape` (null date passes) — kills the AA `veröffentlichtseit` flood (`ingest_stale_skip`
+funnel). (2) `slate.fresh_days` 14→7. (3) NEW `pipeline.verify_liveness` re-verifies stale top
+SCORED/SLATED cards and EXPIREs the confirmed-gone — AA via its API, Indeed via NEW
+`sources.indeed.check_open(jk)` (jobspy TLS session + the embedded `"expired"` JSON boolean; the
+`abgelaufen` banner is React boilerplate → a false positive, spike-confirmed against the user's
+labels). `None` never false-closes; bounded by `retention.liveness_recheck_max`. (4) the tick/​fetch
+slate is now `rebuild=True` so mid-day fresh jobs surface (labels preserved). (5b) a `/feedback` note
+matching an expiry pattern (`abgelaufen`/expired/too-late/`не могу податься`/…) → EXPIRED, not just
+dedup-hidden. (5c) NEW `slate.recent_reject_penalty` demotes role-kinds the user keeps scoring ≤2
+(engineer/intern) in the SORT key only (`slate.pref_penalty_days/floor`; effective_score +
+quality_floor + /eval stay pure). Regression tests: `test_freshness`, `test_indeed_liveness`,
+`test_expire` (verify_liveness), `test_feedback_app` (auto-expire), `test_slate` (pref penalty).
+
+### Real-usage fixes: direction feedback · /more backlog · honest refetch delta (2026-06-18)
+From 4 Telegram-usage problems (laws-of-UX gated). ② NEW `/feedback action=direction` (🧭) — "wrong
+specifics, right direction": low score removes THIS vacancy from the slate while a positive
+`role_feedback fits=1` + the magnet why_tag boost the DOMAIN; web card + bot button (row 2, Hick's).
+③ NEW `/backlog.json` (reuses `annotation_batch`) → the bot's `/more` walks the judged-but-unrated
+pool beyond the ≤10 daily slate. ①④ `nightly_tick` now computes an honest `delta` {scraped, NEW,
+reseen, slate_size, slate_new, wall_seconds} (new = first_seen this tick; no upsert signature change),
+surfaced in `/fetch-status` → the bot replaces "0 шабашек (0 новых)" with "scraped X, NEW 0, slate
+unchanged" + `/why`. Economy: opt-in `search.linkedin_hours_old` (tighter LinkedIn window). M3 verify
+fix: rerank xenc-skip uses one query, not N× `feature_row`. (`models.FEEDBACK_TO_SCORE` += direction,
+additive.)
+
+### Browsing adapters completed: keyless search + config-driven agent backend (2026-06-17)
+Finished the deferred browsing adapters. `browsing/search.py` (keyless ddgs/DuckDuckGo, optional
+self-hosted SearXNG via `browsing.searxng_url`) — live-verified (real Kununu results). `extract.clean`
+live-verified on a real page (terma.com, 15.6k chars). `agent_runtime.build_agent` now sets the agent's
+search backend from config (`browsing.search_backend`, default ddg — NEVER tavily; no API keys).
+`browsing/registry.py` added but the `deutschland` (Handelsregister) backend is REJECTED for cause —
+it downgrades numpy 2→1.26 + pulls an OCR stack, breaking the bge-m3/lightgbm pipeline (see
+docs/IMPORT_AUDIT.md); the adapter degrades to a no-op, grounding stands on Wikidata + legal-suffix.
+`docker-compose.searxng.yml` for opt-in multi-engine search.
+
+### SOTA employer research: Wikidata entity resolution + hard-before-soft grounding (2026-06-17)
+New `schabasch/browsing/` keyless adapter layer (imported packages behind a stable boundary, not
+hand-rolled scrapers): `entity.resolve` (Wikidata wbsearchentities/wbgetentities — typed, name-matched
+entity → canonical identity + official_site/country/employees/inception) and `extract.clean`
+(trafilatura). `validate_company` is now a ladder Wikidata→Wikipedia(guarded)→legal-suffix, and
+`_investigate_row` resolves the employer identity BEFORE the agent and injects it (hard-before-soft) so
+the tight agent stops guessing who the company is. Fixes entity disambiguation at the source (Terma→
+"Therme" gone; Phoenix Medical now a typed medical co with a country flag). `company_knowledge` gains
+wikidata_qid/official_site/country/employees/inception; the backfill re-grounds all employers via the
+ladder. llm.http_get_json now retries 429/502/503/504 (transient) — keyless APIs rate-limit in bursts.
+
+### Seed employer DB from existing data + tighten Wikipedia name-match guard (2026-06-17)
+`scripts/backfill_company_knowledge.py` lifts durable employer facts already in `investigation` into
+the new `company_knowledge` (18 employers; idempotent, no model/network). Reviewing the data caught
+bare-opensearch wrong matches (Terma Group→"Therme Group" spa; Phoenix Medical→"Phoenix Media"), so
+`investigate._name_matches` now requires every significant query token to appear in the Wikipedia
+article title — wired into `_wikipedia_company` (rejects early) + re-validates stored descriptions in
+the backfill (drops the bad ones → live re-research). Reuse gate also ignores thin (no-description)
+records so they don't suppress a proper investigation.
+
+### Less redundant pipeline work + persistent employer knowledge base (2026-06-17)
+Audit found the ReAct agent (the costliest stage) re-investigating done jobs and re-researching the
+same employer per vacancy/tick. Fixes: investigate_top now skips vacancies already in `investigation`
+(covers closed jobs too); new persistent `company_knowledge` sidecar (key=normalize_company) caches
+durable employer facts — researched once, reused everywhere — with only fresh news/reputation
+re-asked past a TTL, folded into the one agent call (config `investigate.company_*`). rerank_scored
+skips candidates with a fresh `xenc_full` and won't load the 2GB reranker when none need scoring.
+
+### Fix: features-stage torch/OpenMP deadlock (CAPA) (2026-06-17)
+The `features` stage hung indefinitely (47+ min, 0% CPU): a parallel `copy_kernel` on the background
+tick thread lost-wakeup-deadlocked with every thread parked in `_pthread_cond_wait` (verified by
+`sample`; trigger = ~86% swap). **Corrective:** `features.torch_num_threads` (default 1) caps torch's
+OpenMP intra-op pool via `_cap_torch_threads` in `extract_features`/`rerank_scored` (1 = inline
+`parallel_for`, no pool, cannot deadlock) + `OMP_NUM_THREADS` set from the same knob at serve start.
+**Preventive:** `memory_guard` watchdog now flags pressure on a swap GROWTH-delta
+(`memory.swap_growth_floor_mb`, default 512) — macOS free-RAM% is blind to swap saturation.
+
+### Freshness re-rank + accent posting-date badge (2026-06-16)
+`build_slate` sorts on `effective · recency_mult` (floor 0.6, halflife 7d) → recent jobs on top;
+reorders only (effective_score + quality_floor stay pure fit, so fresh-slightly-worse beats stale-great
+without disqualifying it, /eval preserved). Posting date → accent freshness badge by the title (green
+≤2d). Config `slate.recency_{halflife_days,floor}`; floor 1.0 = off.
+
+### Can't-qualify floors — clearance/citizenship hard-blocker + 0%-skill floor (MEASURED, shipped) (2026-06-16)
+A "Senior Cyber Threat Analyst / Active TS-SCI" (US-citizen-only, 0/8 hard reqs met) topped the slate
+via the military-security magnet — a job Alina literally can't qualify for. Two measured ranking floors:
+- **`eligibility.jd_hard_blocker`** — deterministic JD regexes (`eligibility.hard_blockers`, e.g. TS/SCI,
+  security clearance, US-citizenship) → STRUCTURAL floor like a PhD-position, applied live in
+  `recompute_live`. Empty list = off.
+- **0%-skill floor** — `slate.zero_cov_mult` multiplies down any card with `llm_cov==0` (meets ZERO
+  extracted hard requirements) in `effective_score`; `cov=None` (uncomputed) is never floored. A HARD
+  rule at exactly-0, distinct from the cov BLEND that regressed.
+- **Measured on the 50 real labels:** guardrail held/improved — blockers neutral (0 labeled matches),
+  0-cov floor 0.862→**0.871** pairwise (9 labeled 0-cov jobs now rank correctly low). Enabled in
+  profile.yaml (`zero_cov_mult: 0.0`, clearance/citizenship `hard_blockers`). Cyber job → off the slate.
+
+### serve: skip the startup fetch when data is fresh (2026-06-16)
+`schabasch serve` no longer re-scrapes on every restart: if a fetch completed within
+`serve.refetch_after_hours` (default 12h, off when 0) it reuses the recent slate and the bot greets
+immediately. `--refetch` forces a fresh fetch; `--no-fetch` never fetches. Freshness = the last
+`slate` funnel stage timestamp (`_hours_since_last_fetch`/`_refetch_guard`).
+- **"Not updated → refetch?" prompt in BOTH surfaces:** when the startup fetch is skipped,
+  `_FETCH_STATE.fetch_skipped`/`data_age_hours` (exposed on `/fetch-status`) drive (a) a UI alert on `/`
+  ("Данные от N ч назад — не обновлялись; нажми обновить, ~15-20 мин") above the existing fetch button,
+  and (b) a bot-greeting note + a `🔄 Обновить вакансии` inline button → `POST /fetch` → "обновляю…" →
+  re-greets the owner when the fetch finishes (`refetch_cb`/`_notify_refetch_done`).
+
+### Rich startup/per-stage console logging (2026-06-16)
+`schabasch serve` was near-silent during its ~15-30 min startup pipeline. Now: a startup BANNER (mode,
+pending scale, the stage plan with ⏳ model markers, ETA note), per-stage `▶ start / ✓ done (result, Ns)`
+lines with a 30s heartbeat so slow stages (LinkedIn scrape, qwen) never look frozen, phase headers
+`[1/3] retrain / [2/3] fetch / [3/3] investigate`, per-card `🔎 [i/N] company …` in the progressive pass,
+the slate-ready line, and a `✓ complete in Xm Ys`. `pipeline.VERBOSE` (default on) + `serve --quiet` to
+mute. Logging only — counts/funnel/FSM unchanged. (Tip: `curl /fetch-status` shows a live run's stage.)
+
+### Two-axis feedback — "good domain, WRONG role" (Delphi-panel design, P0–P3) (2026-06-16)
+A 1–5 rating conflated DOMAIN interest with ROLE fit (Alina rated a VINFAST ML-Engineer 4 = "cool
+domain, wrong role" → the matcher learned "wants engineer jobs"). Now the role axis is separate:
+- **P0** new `role_feedback.py` sidecar (`label_role`: vacancy_id, role_kind, fits, source) + `POST
+  /role-feedback` (classifies role server-side; `--dry` = no-write). Bot: a POSITIVE rating on an
+  ambiguous role (engineer/junior/lead) surfaces a conditional `[✅ role fits][🙅 wrong role]` row;
+  `role_cb` posts it then advances. `slate.build_slate` cards now carry `role_kind`.
+- **P1** `validation.eval_report` adds a DIRECTIONAL `effective_role` row (raw gold masked by 🙅 votes);
+  the raw-label `effective` row stays the decisive guardrail (self-confirming row is `clean=False`, never a gate).
+- **P2** `role_kind.multiplier(kind,cfg,con)` LEARNS a Beta-smoothed per-kind rate from `label_role`
+  when `slate.role_kind_learn.enabled` — replacing the hardcoded 0.7; falls back to the static default
+  below `n_min` (behaviour-preserving: off ⇒ today's 0.862/0.571 baseline exactly).
+- **P3** `eval/role_ablation.py` gate runner: learning OFF vs ON on real labels; ships only if the raw
+  guardrail doesn't regress. Demo (8 seeded votes): engineer mult 0.7→0.555, directional 0.745→0.754,
+  guardrail 0.862 held. Frozen contracts untouched (additive sidecar). Reviewed → SHIP, no blockers.
+
+### Slate de-dup + per-mode chat lock + measured matching experiment (2026-06-16)
+- **De-dup:** the daily slate no longer re-serves a vacancy you already RATED (`label` row); a shown-but-
+  unrated card decays out after `slate.max_reshows` (default 2) days. `_load_scored` gains the exclusion
+  (daily path only; /annotate keeps the full backlog). `build_slate(..., rebuild=True)` + `schabasch slate
+  --rebuild` drop today's saved slate so it applies now. (Fixes 8/10 of the slate being already-rated jobs.)
+- **Per-mode bot chat lock:** `serve` (prod) locks the bot to `telegram.chat_id`; `serve --dry` to
+  `telegram.chat_id_debug` — debug clicks never reach the real user's golden labels.
+- **Matching experiment (MEASURED → not shipped):** wired `llm_cov` into a shared `slate.effective_score`
+  (used by `validation.eval_report` too, so the eval can't drift) + an llm_cov gate on the eligibility
+  soft-lift. On real labels the cov-blend REGRESSED ranking (pairwise 0.862→~0.76 — the labels reward
+  aspiration jobs), so the knobs (`slate.cov_weight`, `eligibility.soft_lift_cov_min`) ship **off (0)**.
+  The shared `effective_score` correctly includes role-kind now, raising the honest eval baseline to
+  0.862/0.571. Recorded in `docs/MATCHING_SOTA.md`.
+
+
+### Telegram bot hook — `/slate.json` + optional bot spawn (2026-06-16)
+- New `GET /slate.json` on the feedback app: today's slate as JSON (the cards the HTML index renders),
+  the only read the Telegram bot needs. `default=float` shim guards any numpy `fit_score`.
+- `feedback_app.serve()` optionally spawns `python -m schabasch_bot` (separate repo) when
+  `telegram.enabled` + a token are set; soft-skips if uninstalled/disabled; terminates the child on exit.
+- Additive `telegram:` config block (example yaml). Bot lives in `schabasch-tg-bot`.
+  `chat_id: 0` = auto-lock the bot to the first `/start` (no manual id needed); a set id hard-locks.
+- `schabasch serve --dry` — testing mode: POST /feedback validates + acks `{ok, dry}` but does NOT
+  write to the `label` table (golden labels untouched). Lets you exercise the bot end-to-end safely.
+- `schabasch enrich` — new entrypoint to run `enrichment.enrich_slate` on today's slate on demand
+  (clean re-parse + pros/cons + company review). Previously enrich only ran inside a full nightly_tick,
+  so manually-assembled DBs never got the `vacancy_enrichment` table; this gives a standalone command.
+- **`schabasch serve` now retrains + fetches on start** (daemon thread; `--no-fetch` / `serve.fetch_on_start`
+  to skip): `triage.retrain_checkpointed` archives the previous model (+ metrics + date) to
+  `data/models/archive/` and `registry.jsonl` then retrains on new feedback (no-op if unchanged);
+  `nightly_tick(run_investigate=False)` does the full fetch; the top-2 are investigated to seed, then
+  the rest run TOP→DOWN ('on the go'). `/fetch-status` gains `slate_ready` (the bot's greet trigger).
+- `investigate.investigate_one(cfg, con, vid)` — idempotent single-card agentic investigation
+  (progressive path); `investigate_top` refactored to share `_investigate_row`. `nightly_tick` gains
+  `run_investigate` flag.
+
 ### Per-feature ablation harness — `eval/feature_ablation.py` (2026-06-16)
 - New **model-free** ablation (reads cached `feature_json` vs the 50 real labels; no LLM/bge-m3/35B; ~1.3s):
   MODE 1 standalone ranking power, MODE 2 leave-one-out of the production fit blend, MODE 3 add-one-in

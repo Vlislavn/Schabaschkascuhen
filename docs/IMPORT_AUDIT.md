@@ -72,3 +72,19 @@ launchctl unload -w ~/Library/LaunchAgents/com.schabasch.nightly.plist
 tail -f /tmp/schabasch_nightly.log
 tail -f /tmp/schabasch_nightly_err.log
 ```
+
+---
+
+# Browsing adapters — import-over-build verdicts (2026-06-17)
+
+SOTA employer-research upgrade. Rule: import a package behind a thin adapter (`schabasch/browsing/`),
+never hand-roll a scraper. Keyless + local-LLM only.
+
+| Need | Decision | Package | Verdict / evidence |
+|---|---|---|---|
+| Entity resolution | **ADOPT (API)** | Wikidata `wbsearchentities`/`wbgetentities` via `http_get_json` | Official keyless JSON API (same shape as our Wikipedia call). Live-verified: Terma→"Terma A/S" (Danish), ABB/Air Liquide/Bosch/EUMETSAT correct. `browsing/entity.py`. |
+| HTML→markdown | **ADOPT** | `trafilatura` (already a dep) | Live-verified on terma.com (15.6k chars clean markdown). `browsing/extract.py`. |
+| Web search | **ADOPT** | `ddgs` (DuckDuckGo, keyless) | Installed with `--override lxml>=6` (its pinned lxml==4.9.4 won't build on py3.13; lxml 6 works). Live-verified: real Kununu results. kl WebSearchTool already supports searx/ddg → wired config-driven (`browsing.search_backend`, never tavily). `browsing/search.py`. |
+| Multi-engine search | **OPTIONAL (self-host)** | SearXNG (`searxng/searxng`) | Keyless, AGPL, Docker. `docker-compose.searxng.yml`; set `browsing.searxng_url`. Falls back to ddg. |
+| German registry | **REJECT (for cause)** | `deutschland` (bundesAPI Handelsregister) | TESTED: pulls an OCR stack (onnxruntime/shapely/mapbox) and DOWNGRADES numpy 2→1.26 + pillow/protobuf → breaks the bge-m3/lightgbm pipeline. Not worth a pipeline-breaking dep; Wikidata (country) + legal-suffix already cover the core "German-rooted real entity" signal. `browsing/registry.py` degrades to no-op; wire a LIGHT keyless backend later. |
+| Deep-research framework | **REJECT** | LangChain/LangGraph | Redundant with the existing `kl_agent_builder` harness; would add a heavy dep for patterns we copy (hard-before-soft, citation). Ponytail. |

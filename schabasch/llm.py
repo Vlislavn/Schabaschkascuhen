@@ -115,6 +115,9 @@ def http_get_json(url: str, *, headers: dict | None = None, params: dict | None 
             raise LLMError(ErrorClass.ENDPOINT_DOWN, str(e)) from e
         if r.status_code in (404, 410):
             raise LLMError(ErrorClass.HTTP_ERROR, f"HTTP {r.status_code} (permanent)")
+        if r.status_code in (429, 502, 503, 504):
+            # transient throttle / upstream blip → retryable (Wikidata/Wikipedia rate-limit bursts)
+            raise LLMError(ErrorClass.ENDPOINT_DOWN, f"HTTP {r.status_code} (transient)")
         if r.status_code != 200:
             raise LLMError(ErrorClass.HTTP_ERROR, f"HTTP {r.status_code}: {r.text[:300]}")
         try:

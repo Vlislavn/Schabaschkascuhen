@@ -152,10 +152,14 @@ def create_app(cfg: dict) -> fastapi.FastAPI
     # GET /annotate -> HTML очереди разметки (annotation_batch + render_annotate_html)
     # GET /eval     -> HTML валидации против реальных меток (validation.eval_report + render_eval_html)
     # GET /gaps     -> HTML пробелов навыков по желанным вакансиям (gaps.gap_report + render_gaps_html)
-    # POST /feedback {vacancy_id:int, action:'bad'|'good'|'star'|'applied', note?:str|null}
+    # POST /feedback {vacancy_id:int, action:'bad'|'good'|'star'|'applied'|'direction', note?:str|null}
     #   -> models.FEEDBACK_TO_SCORE; applied => label.applied=1, сохраняя прежний score_1_5;
-    #      note => label.why_freetext (COALESCE: пустой note не стирает прежний; → judge few-shot);
+    #      direction (🧭 «не эта, но направление ок») => score=2 (убирает из показа) + magnet why_tag +
+    #      role_feedback fits=1 (буст домена); note => label.why_freetext (COALESCE → judge few-shot);
     #      db.insert_label(source='slate'); UPDATE slate_entry.feedback. Ответ {"ok":true} <=1 c.
+    # GET /backlog.json -> {cards, total} judged-but-unrated pool (annotation_batch) — bot /more.
+    # nightly_tick summary + /fetch-status.summary now carry delta {scraped,new,reseen,slate_size,
+    #   slate_new,wall_seconds} — honest "X scraped, Y new, slate unchanged" (bot greet + /why).
     # GET /funnel   -> воронка + канарейки + dedup_candidates (parsed dedup_fuzzy) + dedup_count (json).
     # POST /fetch   -> async full pipeline (nightly_tick) on a background worker, SINGLE-FLIGHT
     #                  (409 if running — no double model-load). GET /fetch-status -> {running, stage, …}.
@@ -205,9 +209,17 @@ eligibility.soft_lift_threshold: 0.55            # SOFT (prose-degree) gap lifte
 features._llm_coverage → (coverage, missing, requirements[]); persists llmcov_cache.requirements.
 features.fit_from_feature(feat, weights) → live fit_score; features.recompute_live(con, vid, cfg,
   cand_quals) → {fit_score, fit_note, elig_score, elig_note, elig_severity} from caches (no model).
-eligibility.eligibility_gate(req, cand, *, floor, mid, fit_score=None, soft_lift_threshold) →
-  (mult, reason, severity) where severity ∈ {"structural"(red ⛔), "soft"(amber, lifted by high fit)}.
+eligibility.eligibility_gate(req, cand, *, floor, mid, fit_score=None, soft_lift_threshold,
+  llm_cov=None, soft_lift_cov_min=0.0) → (mult, reason, severity); severity ∈ {"structural"(red ⛔),
+  "soft"(amber, lifted by high fit AND llm_cov ≥ soft_lift_cov_min)}.
+slate.effective_score(fields, cfg, con=None) → production slate ranking score (shared with validation.eval_report).
+  build_slate sorts on a FRESHNESS-re-ranked key (effective · slate._recency_mult(days, cfg)); effective_score
+  itself + the quality_floor gate stay pure fit (recency reorders, never disqualifies). recency_floor 1.0 = off.
+role_kind.multiplier(kind, cfg=None, con=None) → role down-rank; learned from label_role when role_kind_learn.enabled + con.
+role_feedback.{record,fit_counts,veto_map}(con, ...) → label_role sidecar (role-fit axis; source slate|debug firewall).
 eligibility.req_from_cache(con, content_hash, jd_text) → cached req + guards (no LLM); None on miss.
+eligibility.jd_hard_blocker(jd_text, patterns, *, floor) → (floor, reason, "structural") | None — deterministic
+  legal-barrier blocker (clearance/citizenship) from config eligibility.hard_blockers; empty patterns = off.
 geo.geo_class(city, cfg) → "near"|"far"|"unknown"; geo.geo_mark(city, cfg) → {far, dist_km, anchor}.
   prefilter no longer drops far-DE (returns near/far/unknown counts; nothing PREFILTERED).
 features.bgem3_sparse_scores(model, cv, jds) → bge-m3 sparse-lexical scores via native compute_score
@@ -220,6 +232,24 @@ investigate.validate_company(name, agent_enrichment, cache) → {company_descrip
   company_verified, validation_source, wiki_url} — keyless Wikipedia (de→en, UA + org-guard) + German
   legal-suffix; cross-checks the agent. investigation enrichment adds those fields; patches feature
   company_known (=verified) + german_rooted.
+  Redundant-work gates: investigate_top SELECTs only top-N SCORED NOT already in `investigation` (the
+  agent never re-runs on done/closed jobs); rerank_scored skips candidates that already carry a fresh
+  xenc_full and returns {skipped:all_fresh} WITHOUT loading the reranker when none need (re)scoring.
+browsing.entity.resolve(name, *, lang="en") → typed company entity via keyless Wikidata
+  (wbsearchentities org-type + name-match guard → wbgetentities) → {qid, label, description,
+  official_site, country, employees, inception, wikidata_url} | None. Adapter over an imported API,
+  graceful-degrade. browsing.extract.clean(html|url) → trafilatura markdown | None.
+  validate_company is now Wikidata→Wikipedia(guarded)→legal-suffix; _investigate_row injects the
+  resolved identity into the agent task BEFORE the run (hard-before-soft).
+browsing.search.search(query, *, max_results=5, searxng_url=None) → [{title,url,snippet}] (keyless:
+  SearXNG if url else ddgs/DuckDuckGo; [] on failure). browsing.registry.lookup(name) → {legal_form,
+  status,…} | None (deutschland-optional; degrades to None — rejected for cause, see IMPORT_AUDIT).
+  agent_runtime.build_agent wires the agent's WebSearchTool backend from config browsing.search_backend
+  (ddg|searx, never tavily) + browsing.searxng_url — keyless, deterministic.
+investigate.{get_company_knowledge,upsert_company_facts,upsert_company_news}(con, …) — NEW sidecar
+  `company_knowledge` (employer DB, key=normalize_company): research a company ONCE, reuse durable
+  facts on every future vacancy + tick (config investigate.company_facts_ttl_days); only fresh
+  news/reputation is re-asked past investigate.company_news_refresh_days, folded into the one agent call.
 slate.build_slate item keys add: far, dist_km, geo_anchor, also_at, elig_severity, user_note.
 entry: `python -m schabasch.cli ...` (и console_script `schabasch`).
 
@@ -266,6 +296,51 @@ memory.{guard_enabled, hard_floor_pct, soft_floor_pct, watchdog_interval_seconds
 slate.role_kind_mult: {hands_on_engineer: 0.7, junior: 0.5, ...}   # role-kind soft down-rank (real-label tuned)
 ```
 Sidecars added (additive, db.py schema frozen): `session_comment_task`, `vacancy_enrichment`.
+
+## Stale & expired vacancy gates (2026-06-18) — frozen files untouched, all additive
+```python
+# schabasch/freshness.py — NEW. Publication-date ingestion gate (one rule, every source).
+too_old(date_posted: str | None, max_age_days: int) -> bool   # True only if a parseable date older than window; null/blank → False
+max_post_age_days(cfg) -> int                                 # search.max_post_age_days, else ceil(search.hours_old/24), else 3
+
+# schabasch/sources/indeed.py — NEW. Deterministic Indeed liveness (mirrors arbeitsagentur.check_open).
+check_open(jk: str | None, *, attempts=4) -> bool | None      # TLS-fetch viewjob, parse "expired":true|false JSON; True/False/None (never false-close)
+jk_from_url(url: str | None) -> str | None                    # extract ?jk= from a viewjob URL
+
+# schabasch/pipeline.py — NEW step (HTTP-only, not memory-gated), runs after rerank, before slate.
+verify_liveness(cfg, con) -> {checked, expired, unknown}      # stale SCORED/SLATED AA+Indeed → check_open; False → set_status(EXPIRED, EXPIRED_GONE)
+# nightly_tick: build_slate now called with rebuild=True (mid-day fresh jobs surface; labels preserved).
+
+# schabasch/slate.py — NEW. Data-driven preference demotion (sort key only; effective_score/eval stay pure).
+recent_reject_penalty(con, cfg) -> {role_kind: mult}          # recent (≤pref_penalty_days) score≤2 labels by role_kind → sub-1.0 multiplier
+
+# schabasch/feedback_app.py — NEW. Auto-expire on the user's expiry note.
+note_signals_expired(note: str | None) -> bool                # /feedback: a matching note → set_status(EXPIRED, EXPIRED_GONE)
+```
+```yaml
+search.max_post_age_days: 7        # ingestion date gate window (drop a posting published older than N days)
+slate.fresh_days: 7                # tightened 14→7 (last_seen freshness ceiling on the daily slate)
+slate.pref_penalty_days: 7         # 5c lookback for recent role-kind rejections (0 ⇒ off)
+slate.pref_penalty_floor: 0.3      # strongest sort-key demotion a fully-rejected kind gets
+retention.liveness_recheck_max: 30 # verify_liveness: max stale cards re-verified per tick
+# retention.liveness_stale_days    # re-verify a card not re-seen in N days (default ceil(hours_old/24)+1)
+```
+
+## Triage deploy gate + de-ranked (2026-06-18) — frozen files untouched, additive
+```python
+# schabasch/triage.py — NEW deploy gate (measure-then-ship). train() keeps the PRIOR artifact rather
+# than ship a model that fails its own TEMPORAL holdout (incident: a temporal-ρ=−0.31 model was served).
+_should_deploy(metrics: dict, floor: float) -> bool   # measured spearman ≤ floor → False; None/NaN → True
+# train() now returns {"rejected": True, "reason": "failed temporal holdout", ...} when the gate blocks.
+
+# slate.build_slate: triage_score REMOVED from the sort tie-break (drop-filter, not a ranker) — fit-led
+#   order unchanged; triage still gates the normalize queue (select_for_normalize, drop_priorities).
+# validation.eval_report: the triage row measures ONLY model_version != 'cold_start' decisions,
+#   relabeled "ML-гейт (triage, drop-фильтр)", omitted when <10 ML-scored.
+```
+```yaml
+triage.deploy_min_spearman: 0.0   # deploy gate: keep prior model when temporal-holdout spearman ≤ this
+```
 
 ## UX redesign (2026-06-16, laws-of-UX gated) — internal to slate.py render, no public-signature change
 - `slate.py`: new `_legend_html()` (collapsed emoji legend); `_card_block` note moved behind a

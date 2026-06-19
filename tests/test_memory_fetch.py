@@ -89,3 +89,16 @@ def test_heavy_step_runs_fn_with_headroom(file_cfg, monkeypatch):
     pipeline._heavy_step(con, "judge", lambda: {"scored": 7}, summary, "qwen")
     assert summary["judge"] == {"scored": 7}
     con.close()
+
+
+def test_swap_growth_delta_signal():
+    """CAPA preventive: a swap GROWTH-delta flags memory pressure (macOS free-RAM% is blind to swap
+    saturation — the features deadlock fired at 86% swap / 84% free). Only growth beyond the floor
+    trips; a high-but-flat level, a missing prior sample, and floor=0 (off) never do."""
+    g = memory_guard._swap_growth_exceeded
+    assert g(1000.0, 1600.0, 512) is True      # +600 > 512 → pressure
+    assert g(1000.0, 1400.0, 512) is False     # +400 < 512 → fine
+    assert g(8000.0, 8000.0, 512) is False     # saturated but FLAT → not a growth signal
+    assert g(8000.0, 7000.0, 512) is False     # shrinking → never pressure
+    assert g(None, 1600.0, 512) is False       # no prior sample → no-op
+    assert g(1000.0, 9999.0, 0) is False       # floor 0 = off

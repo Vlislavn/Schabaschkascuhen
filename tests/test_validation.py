@@ -33,6 +33,32 @@ def _seed(con, url, *, label, fit, judge=None):
     return vid
 
 
+def test_eval_role_aware_directional_row(cfg, con):
+    """P1: a golden 🙅 wrong-role vote adds a DIRECTIONAL 'effective_role' row; the raw-label
+    'effective' guardrail is unchanged; a debug-source vote is firewalled out."""
+    from schabasch import role_feedback
+    a = _seed(con, "r/a", label=5, fit=0.8)
+    _seed(con, "r/b", label=4, fit=0.7)
+    _seed(con, "r/c", label=2, fit=0.3)
+
+    rep = validation.eval_report(cfg, con)                       # no role votes yet
+    assert "effective" in {r["name"] for r in rep["rows"]}
+    assert "effective_role" not in {r["name"] for r in rep["rows"]}
+
+    role_feedback.record(con, a, "hands_on_engineer", False, source="slate")   # golden veto
+    role_feedback.record(con, a, "hands_on_engineer", True, source="debug")    # firewalled (ignored)
+    rep2 = validation.eval_report(cfg, con)
+    assert "effective_role" in {r["name"] for r in rep2["rows"]}   # directional row appears
+    g1 = next(r for r in rep["rows"] if r["name"] == "effective")
+    g2 = next(r for r in rep2["rows"] if r["name"] == "effective")
+    assert g1["pairwise_acc"] == g2["pairwise_acc"]                # guardrail untouched by the veto
+    # MEASUREMENT FENCE (review follow-up): the directional row is clean=False; the headline anchor
+    # must always be the clean, label-independent fit_score — never a self-confirming veto row.
+    er = next(r for r in rep2["rows"] if r["name"] == "effective_role")
+    assert er["clean"] is False
+    assert rep2["headline"]["clean"] is True
+
+
 # --------------------------------------------------------------------------- gold from real labels
 
 def test_label_gold_uses_score_and_applied(con):

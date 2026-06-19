@@ -313,3 +313,41 @@ def test_recency_days_from_posting_date():
     assert 2 <= features._recency_days(None, fs) <= 4       # falls back to first_seen
     assert features._recency_days(None, None) == 7.0         # neutral default
     assert features._recency_days("not-a-date", None) == 7.0  # unparseable → default
+
+
+def test_torch_thread_cap_applied():
+    """CAPA invariant: _cap_torch_threads pins torch's intra-op (OpenMP) pool to the configured
+    size — the condition that prevents the features-stage copy_kernel deadlock (all threads parked
+    in _pthread_cond_wait). Config-driven, not hardcoded; restores 1 so other tests see the safe
+    default. Reverting the cap (so threads != configured) is what makes this fail → it guards the fix."""
+    import torch
+    from schabasch import features
+    features._cap_torch_threads({"features": {"torch_num_threads": 1}})
+    assert torch.get_num_threads() == 1
+    features._cap_torch_threads({"features": {"torch_num_threads": 2}})
+    assert torch.get_num_threads() == 2                      # config-driven, not hardcoded to 1
+    features._cap_torch_threads({"features": {"torch_num_threads": 0}})
+    assert torch.get_num_threads() == 2                      # <=0 → leave current setting (no-op)
+    features._cap_torch_threads({"features": {"torch_num_threads": 1}})  # restore safe default
+    assert torch.get_num_threads() == 1
+
+
+def test_rerank_skips_when_all_fresh(cfg, con, monkeypatch):
+    """② rerank_scored re-scoring an already-ranked job is pure waste (deterministic). When every
+    candidate already carries a fresh xenc_full it returns 'all_fresh' WITHOUT loading the 2GB
+    reranker — proven by a loader that records calls."""
+    from schabasch import candidate, features
+    from tests.conftest import seed_scored
+    features._ensure_schema(con)
+    monkeypatch.setattr(candidate, "candidate_doc", lambda c: "CV text for the candidate.")
+    vid = seed_scored(con, "u/ranked", score=5, company="Co")
+    feat = {"match_score": 0.7, "fit_score": 0.7, "xenc_full": 0.8, "elig_score": 1.0}
+    con.execute("INSERT OR REPLACE INTO vacancy_feature (vacancy_id, match_score, feature_json,"
+                " computed_at) VALUES (?,?,?,datetime('now'))", (vid, 0.7, json.dumps(feat)))
+    con.commit()
+    called = {"load": 0}
+    monkeypatch.setattr(features, "_load_reranker",
+                        lambda name: called.__setitem__("load", called["load"] + 1))
+    out = features.rerank_scored(cfg, con)
+    assert out.get("skipped") == "all_fresh"
+    assert called["load"] == 0     # the 2GB reranker was NOT loaded — pure waste avoided

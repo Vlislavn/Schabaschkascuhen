@@ -10,8 +10,7 @@ import json
 import random
 from html import escape
 
-from . import db, eligibility as _elig, features as _features, geo as _geo, role_kind as _rk, \
-    triage as _triage
+from . import db, eligibility as _elig, features as _features, geo as _geo, role_kind as _rk
 from .candidate import load_candidate
 from .geo import _normalize_city
 from .i18n import DEFAULT_LANG, available_langs, t
@@ -81,7 +80,8 @@ def _fit_fields(con, vacancy_id: int, cfg: dict, cand_quals: dict | None = None)
             "elig_severity": live["elig_severity"]}
 
 
-def _load_scored(con, rubric_version: str | None = None, *, max_age_days: int | None = None) -> list[dict]:
+def _load_scored(con, rubric_version: str | None = None, *, max_age_days: int | None = None,
+                 max_reshows: int = 99) -> list[dict]:
     # Latest judge score PER VACANCY, restricted to the active rubric so stale scores from a
     # previous persona/rubric never surface (re-judging assigns a fresh current-rubric row).
     mid_sql = "SELECT vacancy_id, MAX(id) mid FROM judge_score"
@@ -101,6 +101,13 @@ def _load_scored(con, rubric_version: str | None = None, *, max_age_days: int | 
         from datetime import datetime, timedelta, timezone
         where += " AND v.last_seen >= ?"
         wparams.append((datetime.now(timezone.utc) - timedelta(days=max_age_days)).isoformat())
+        # DE-DUP — daily slate only (/annotate passes max_age_days=None to keep the full backlog for
+        # labeling): never re-serve a vacancy the user already RATED (has a slate label); a shown-but-
+        # unrated card may reappear at most `max_reshows` distinct days before it decays out, so the
+        # slate stays fresh instead of re-showing the same jobs morning after morning.
+        where += " AND v.id NOT IN (SELECT vacancy_id FROM label WHERE source = 'slate')"
+        where += " AND (SELECT COUNT(DISTINCT slate_date) FROM slate_entry WHERE vacancy_id = v.id) < ?"
+        wparams.append(max_reshows)
     rows = con.execute(
         f"""SELECT v.id, v.title, v.company, v.city, v.url, v.card_json, v.date_posted, v.first_seen,
                   js.score, js.why_tag, js.why_freetext, js.explanation
@@ -138,6 +145,7 @@ def _load_scored(con, rubric_version: str | None = None, *, max_age_days: int | 
             "investigation": inv_map.get(vid),
             "enrichment": enr_map.get(vid),
             "user_note": notes.get(vid, ""),
+            "role_kind": _rk.classify(r["title"], card.get("summary_2lines", "")),
         })
     return items
 
@@ -175,13 +183,110 @@ def _collapse_reposts(items: list[dict]) -> list[dict]:
     return out
 
 
-def build_slate(cfg: dict, con, slate_date: str) -> list[dict]:
-    """Собрать slate на дату. INSERT slate_entry, set_status(SLATED). Возвращает карточки."""
+def effective_score(fields: dict, cfg: dict, con=None) -> float:
+    """Production slate ranking score — SHARED by build_slate and validation.eval_report so the eval
+    can never drift from production. fields: {fit_score, llm_cov, score(judge 1-5), elig_score, title,
+    summary}.
+
+        effective = fit_eff · (1 + β·judge_norm) · elig_score · rk
+        fit_eff   = (1-λ)·fit_score + λ·llm_cov     (λ = slate.cov_weight)
+
+    llm_cov (honest per-requirement coverage) co-leads the headline so an aspiration-magnet job with
+    high semantic fit but ~0 real coverage (VINFAST ML-Engineer: fit 0.76, cov 0.12) no longer tops the
+    slate. λ=0 reproduces the old fit-only behaviour. rk = role-kind soft down-rank (engineer/intern)."""
+    s_cfg = cfg.get("slate", {})
+    fit = float(fields.get("fit_score") or 0.0)
+    cov = fields.get("llm_cov")
+    lam = float(s_cfg.get("cov_weight", 0.0))
+    fit_eff = fit if (cov is None or lam <= 0.0) else (1.0 - lam) * fit + lam * float(cov)
+    beta = float(s_cfg.get("judge_blend_beta", 0.0))
+    sc = fields.get("score")
+    judge_norm = max(0.0, (float(sc) - 1.0) / 4.0) if sc is not None else 0.0
+    elig = float(fields["elig_score"]) if fields.get("elig_score") is not None else 1.0
+    rk = _rk.multiplier(_rk.classify(fields.get("title"), fields.get("summary")), cfg, con)
+    eff = fit_eff * (1.0 + beta * judge_norm) * elig * rk
+    # 0%-skill floor: a job where the user meets ZERO extracted hard requirements (llm_cov==0) is not a
+    # real match however high the semantic/magnet fit — multiply it down so it drops out of the exploit
+    # slots. A HARD rule at exactly-zero coverage only (distinct from the cov_weight BLEND, which
+    # regressed on real labels). zero_cov_mult=1.0 ⇒ off (behaviour-preserving). cov=None (uncomputed)
+    # is never floored — only an explicit 0.
+    zero_mult = float(s_cfg.get("zero_cov_mult", 1.0))
+    if zero_mult < 1.0 and cov is not None and float(cov) <= 0.0:
+        eff *= zero_mult
+    return eff
+
+
+def _recency_mult(days: float, cfg: dict) -> float:
+    """Freshness multiplier applied to the slate SORT key only — recency REORDERS, never gates
+    (effective_score + quality_floor stay pure quality, so /eval can't drift). Balanced decay:
+    floor + (1-floor)·0.5^(days/halflife) → today×1.0, one halflife midway to floor, old→floor.
+    slate.recency_floor defaults to 1.0 = OFF (behaviour-preserving when the keys are absent)."""
+    s_cfg = cfg.get("slate", {})
+    floor = float(s_cfg.get("recency_floor", 1.0))
+    hl = float(s_cfg.get("recency_halflife_days", 7.0))
+    if floor >= 1.0 or hl <= 0.0:
+        return 1.0
+    return floor + (1.0 - floor) * (0.5 ** (max(0.0, days) / hl))
+
+
+def recent_reject_penalty(con, cfg: dict) -> dict[str, float]:
+    """5c — data-driven role-kind demotion from the user's OWN recent labels (the «инженеры отстой /
+    никаких инженеров» signal). Tally source='slate' labels within slate.pref_penalty_days by
+    role_kind (role_kind.classify on title+summary); a kind the user keeps scoring ≤2 gets a sub-1.0
+    multiplier toward slate.pref_penalty_floor. Returns {role_kind: mult}; {} ⇒ no recent signal.
+
+    Used by build_slate on the SORT key ONLY (× recency_mult), so effective_score + quality_floor +
+    /eval stay pure ("recency reorders, never gates"). Composes on top of the static role_kind_mult
+    already inside effective_score. ≥2 rejections per kind required so one noisy label can't penalise."""
+    import json as _json
+    from datetime import datetime, timedelta, timezone
+    s_cfg = cfg.get("slate", {})
+    days = int(s_cfg.get("pref_penalty_days", 0) or 0)
+    if days <= 0:
+        return {}
+    floor = float(s_cfg.get("pref_penalty_floor", 0.3))
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    rows = con.execute(
+        """SELECT v.title, v.card_json, l.score_1_5
+           FROM label l JOIN vacancy v ON v.id = l.vacancy_id
+           WHERE l.source = 'slate' AND l.created_at >= ? AND l.score_1_5 IS NOT NULL""",
+        (cutoff,)).fetchall()
+    rej: dict[str, int] = {}
+    tot: dict[str, int] = {}
+    for r in rows:
+        try:
+            summ = (_json.loads(r["card_json"]) if r["card_json"] else {}).get("summary_2lines", "")
+        except (TypeError, _json.JSONDecodeError):
+            summ = ""
+        kind = _rk.classify(r["title"], summ)
+        if not kind:               # neutral (analyst/manager/owner) — the profile-fit roles, no penalty
+            continue
+        tot[kind] = tot.get(kind, 0) + 1
+        if int(r["score_1_5"]) <= 2:
+            rej[kind] = rej.get(kind, 0) + 1
+    out: dict[str, float] = {}
+    for kind, n_rej in rej.items():
+        if n_rej < 2:              # ponytail: ≥2 rejections so a single noisy label can't penalise
+            continue
+        rate = n_rej / tot[kind]                            # share of this kind's recent labels that were ≤2
+        out[kind] = floor + (1.0 - floor) * (1.0 - rate)    # all-reject → floor; mixed → milder
+    return out
+
+
+def build_slate(cfg: dict, con, slate_date: str, *, rebuild: bool = False) -> list[dict]:
+    """Собрать slate на дату. INSERT slate_entry, set_status(SLATED). Возвращает карточки.
+
+    rebuild=True drops this date's persisted slate_entry first, so a de-dup / re-tune takes effect now
+    rather than on the next fresh day (build_slate is otherwise idempotent — it reopens the saved slate).
+    Labels live in the `label` table, not slate_entry, so a rebuild never loses feedback."""
     s_cfg = cfg.get("slate", {})
     n_exploit = int(s_cfg.get("exploit", 8))
     n_explore = int(s_cfg.get("explore", 2))
     max_per_company = int(s_cfg.get("max_per_company", 3))
     rubric_version = cfg.get("judge", {}).get("rubric_version")
+    if rebuild:
+        con.execute("DELETE FROM slate_entry WHERE slate_date = ?", (slate_date,))
+        con.commit()
 
     # если slate на эту дату уже собран — вернуть его (идемпотентность утреннего открытия)
     mid_sql = "SELECT vacancy_id, MAX(id) mid FROM judge_score"
@@ -227,6 +332,7 @@ def build_slate(cfg: dict, con, slate_date: str) -> list[dict]:
                 "enrichment": enr_map.get(int(r["vacancy_id"])),
                 "far": mark["far"], "dist_km": mark["dist_km"], "geo_anchor": mark["anchor"],
                 "user_note": notes.get(int(r["vacancy_id"]), ""),
+                "role_kind": _rk.classify(r["title"], card.get("summary_2lines", "")),
                 **_fit_fields(con, int(r["vacancy_id"]), cfg, cand_quals),
             })
         return out
@@ -234,11 +340,10 @@ def build_slate(cfg: dict, con, slate_date: str) -> list[dict]:
     # FRESHNESS: the daily slate shows only jobs re-seen within slate.fresh_days (default 14) —
     # /annotate (annotation_batch) passes no ceiling and keeps the full backlog for labeling.
     items = _load_scored(con, rubric_version=rubric_version,
-                         max_age_days=int(s_cfg.get("fresh_days", 14)))
-    ts_map = _triage.scores_by_vacancy(con)
+                         max_age_days=int(s_cfg.get("fresh_days", 14)),
+                         max_reshows=int(s_cfg.get("max_reshows", 2)))
     cand_quals = _cand_quals(con)
     for it in items:
-        it["triage_score"] = ts_map.get(it["vacancy_id"], 0.0)
         feat = _features.feature_row(con, it["vacancy_id"]) or {}
         it["xenc_score"] = float(feat.get("xenc_full") or 0.0)
         it["fit_hyre"] = float(feat.get("fit_hyre") or 0.0)
@@ -263,26 +368,22 @@ def build_slate(cfg: dict, con, slate_date: str) -> list[dict]:
     # On real labels β=0 measures best (the magnet judge is near-random as a magnitude term); the
     # magnet instead DIFFERENTIATES comparable-fit jobs as the tie-break key below + drives explore
     # selection + the card emoji. judge_norm = (score-1)/4 ∈ [0,1]. eligibility stays multiplicative.
-    beta = float(s_cfg.get("judge_blend_beta", 0.0))
-
-    def _effective(x: dict) -> float:
-        fit = x.get("fit_score", 0.0)
-        judge_norm = max(0.0, (float(x["score"]) - 1.0) / 4.0) if x.get("score") is not None else 0.0
-        elig = x.get("elig_score", 1.0)
-        # role-kind soft down-rank (W1): hands-on-engineer / intern roles the user repeatedly rejected get
-        # a config-driven multiplier (<1) so they sink out of the exploit slots — never a hard drop
-        # (still explore-eligible; one engineer role the user rated 4). Measured on real labels (W4).
-        rk = _rk.multiplier(_rk.classify(x.get("title"), x.get("summary")), cfg)
-        return fit * (1.0 + beta * judge_norm) * elig * rk
-
+    pref_mult = recent_reject_penalty(con, cfg)   # 5c: demote role-kinds the user keeps rejecting (sort only)
     for it in items:
-        it["_eff"] = _effective(it)
-    # tie-break among comparable-fit jobs: magnet judge (the preference differentiator), then triage,
+        it["_eff"] = effective_score(it, cfg, con)   # shared with validation.eval_report (no drift)
+        # Freshness re-rank (the user's "recent on top" ask): _rank = _eff · recency_mult. Applied to
+        # the SORT key only — _eff (the eval-shared quality score + quality_floor gate) stays pure, so
+        # a fresh-but-slightly-worse job outranks a stale great one without being able to disqualify it.
+        # 5c pref_mult rides the SAME sort-only channel: a kind the user repeatedly scored ≤2 sinks.
+        days = _features._recency_days(it.get("date_posted"), it.get("first_seen"))
+        it["_rank"] = it["_eff"] * _recency_mult(days, cfg) * pref_mult.get(it.get("role_kind") or "", 1.0)
+    # tie-break among comparable-rank jobs: magnet judge (the preference differentiator), then
     # integration potential, freshness-via-slop. This is where the magnet earns its keep at β=0.
+    # (triage REMOVED from the sort — its temporal-holdout forward ranking was unproven/negative; it
+    # stays a cheap pre-LLM drop-filter in normalize, not a ranker.)
     items.sort(key=lambda x: (
-        -x["_eff"],
+        -x["_rank"],
         -(float(x["score"]) if x.get("score") is not None else 0.0),
-        -x["triage_score"],
         -x["integration_potential"],
         x["slop_score"],
     ))
@@ -345,7 +446,7 @@ def build_slate(cfg: dict, con, slate_date: str) -> list[dict]:
             "score", "why", "explanation", "summary", "work_mode", "date_posted", "first_seen",
             "investigation", "enrichment", "fit_score", "fit_note", "llm_cov", "llm_cov_reqs",
             "elig_score", "elig_note", "elig_severity", "far", "dist_km", "geo_anchor", "also_at",
-            "user_note")
+            "user_note", "role_kind")
     return [{k: e.get(k) for k in keys} for e in slate]
 
 
@@ -384,7 +485,10 @@ margin-right:6px;cursor:pointer}
 button:hover{background:#eee}
 button:focus-visible,summary:focus-visible,a:focus-visible{outline:2px solid #1F4E79;outline-offset:2px}
 a.open{font-size:13px}.tag-explore{color:#595959;font-size:11px;font-weight:600}
-.posted{color:#595959;font-size:12px}
+.freshbadge{font-size:12px;border-radius:6px;padding:1px 7px;margin-left:4px;white-space:nowrap}
+.freshbadge.fresh{background:#e7f5ec;color:#1a7f3c;font-weight:600}
+.freshbadge.recent{color:#595959}
+.freshbadge.old{color:#8a8a8a}
 .undo{display:none;font-size:12px;color:#595959;cursor:pointer;text-decoration:underline}
 .card.done .undo{display:inline}
 .verified{background:#f3f4f6;border:1px solid #e2e4e8;color:#44474c;border-radius:6px;
@@ -789,7 +893,6 @@ def _card_block(e: dict, *, show_applied: bool = True, lang: str = DEFAULT_LANG)
     score_html = _score_badge(score, lang)
     fbstate = f' ✓ {escape(str(done))}' if done else ""
     posted = _posted_ago(e.get("date_posted"), e.get("first_seen"), lang)
-    posted_html = f' · <span class="posted">{escape(posted)}</span>' if posted else ""
     # 📍 far-but-in-Germany marker (neutral gray, never competing with the score/⛔ — Von Restorff).
     far_html = ""
     if e.get("far"):
@@ -844,6 +947,11 @@ def _card_block(e: dict, *, show_applied: bool = True, lang: str = DEFAULT_LANG)
                  f'placeholder="{escape(t(lang, "card.note_placeholder"))}"{note_hidden}>{user_note}</textarea>')
     # data-* for the client-side filter chips (WS3)
     data_days = _days_ago(e.get("date_posted"), e.get("first_seen"))
+    # Freshness badge by the title — accent color reserved for genuinely-fresh (≤2d) only (Von
+    # Restorff); the score badge stays the single focal point. Replaces the muted gray date that
+    # used to hide in the .meta2 line — recency is now the user's "конкретное преимущество".
+    fresh_tier = "fresh" if data_days <= 2 else ("recent" if data_days <= 7 else "old")
+    posted_badge = f'<span class="freshbadge {fresh_tier}">{escape(posted)}</span>' if posted else ""
     data_score = int(score) if score is not None else 0
     data_fit = float(e.get("fit_score") or 0.0)
     data_far = 1 if e.get("far") else 0
@@ -852,9 +960,9 @@ def _card_block(e: dict, *, show_applied: bool = True, lang: str = DEFAULT_LANG)
 data-fit="{data_fit:.4f}" data-far="{data_far}">
   <div class="row">
     <div>
-      <p class="title">{escape(str(e.get('title') or ''))} {tag_explore}</p>
+      <p class="title">{escape(str(e.get('title') or ''))} {posted_badge}{tag_explore}</p>
       <p class="meta">{escape(str(e.get('company') or '—'))} · {escape(str(e.get('city') or '—'))}<span \
-class="meta2"> · {escape(str(e.get('work_mode') or ''))}{posted_html}{far_html}{role_flag_html}</span></p>
+class="meta2"> · {escape(str(e.get('work_mode') or ''))}{far_html}{role_flag_html}</span></p>
     </div>
     {score_html}
   </div>
@@ -870,6 +978,7 @@ class="meta2"> · {escape(str(e.get('work_mode') or ''))}{posted_html}{far_html}
     <button aria-label="{escape(t(lang, "btn.good_aria"))}" title="{escape(t(lang, "btn.good_title"))}" onclick="fb({vid},'good',this)">😎</button>
     <button aria-label="{escape(t(lang, "btn.star_aria"))}" title="{escape(t(lang, "btn.star_title"))}" onclick="fb({vid},'star',this)">👸✨🧚</button>
     {applied_btn}
+    <button aria-label="direction interesting, not this vacancy" title="направление интересно, но не эта вакансия (буст домен)" onclick="fb({vid},'direction',this)">🧭</button>
     <a class="open" href="{escape(str(e.get('url') or '#'))}" target="_blank">{t(lang, "card.open_original")}</a>
     <span class="fbstate muted">{fbstate}</span>
     <span class="undo" onclick="undo({vid})">{t(lang, "card.undo")}</span>

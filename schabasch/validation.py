@@ -73,7 +73,7 @@ def eval_report(cfg: dict, con) -> dict:
             continue  # skip a single malformed feature row, don't abort the whole report
     rubric = cfg.get("judge", {}).get("rubric_version")
     judge = _latest_judge(con, rubric)
-    triage = _triage.scores_by_vacancy(con)
+    _triage._ensure_schema(con)   # ensure triage_decision exists; the ML-gate row queries it directly
 
     # fit_score + eligibility recomputed LIVE (current fit_weights + Master-Data/high-fit-lift gate)
     # so /eval reflects production WITHOUT a heavy rerank — same source as slate.build_slate.
@@ -98,23 +98,48 @@ def eval_report(cfg: dict, con) -> dict:
     mj["label"], mj["clean"] = "оценка судьи (магнит)", False
     rows.append(mj)
 
-    # PRODUCTION effective ranking (mirrors slate._effective): FIT LEADS, magnet judge is a small
-    # bounded differentiator. effective = fit · (1 + β·judge_norm) · elig (β = slate.judge_blend_beta).
-    beta = float(cfg.get("slate", {}).get("judge_blend_beta", 0.0))
+    # PRODUCTION effective ranking — uses the SHARED slate.effective_score so /eval can never drift
+    # from the slate (fit_eff = (1-λ)·fit + λ·llm_cov, × judge × elig × role-kind). Needs title (rk)
+    # + llm_cov (coverage blend) per vacancy; summary is title-only here (role_kind keys on the title).
+    from . import slate as _slate
+    titles = {int(r[0]): (r[1] or "") for r in con.execute(
+        "SELECT id, title FROM vacancy WHERE id IN (%s)" % ",".join("?" * len(gold)),
+        tuple(gold))} if gold else {}
     eff: dict[int, float] = {}
     for i in gold:
         if i in live:
-            j = float(judge.get(i, 0))
-            judge_norm = max(0.0, (j - 1.0) / 4.0)
-            eff[i] = live[i]["fit_score"] * (1.0 + beta * judge_norm) * live[i]["elig_score"]
+            eff[i] = _slate.effective_score(
+                {"fit_score": live[i]["fit_score"], "elig_score": live[i]["elig_score"],
+                 "llm_cov": feats.get(i, {}).get("llm_cov"), "score": judge.get(i),
+                 "title": titles.get(i, ""), "summary": ""}, cfg, con)
     me = metrics.evaluate(eff, gold, name="effective")
     me["label"], me["clean"] = "итоговое ранжирование (fit·judge·elig)", False
     rows.append(me)
 
-    tscore = {i: float(triage.get(i, 0.0)) for i in gold if i in triage}
-    if tscore:
+    # P1 — veto-aware DIRECTIONAL gold: the raw label masked by a "🙅 wrong role" vote (fits=0 → 0),
+    # i.e. "what the rank SHOULD agree with once role is separated from domain". Rewards a role-aware
+    # rank, but is SELF-CONFIRMING (built from the same vetoes the learned multiplier trains on) → it is
+    # DIRECTIONAL ONLY: it may veto a ship, never justify one. The raw-label `effective` row above stays
+    # the decisive guardrail (Delphi panel). Absent until any golden role vote exists.
+    from . import role_feedback as _rolefb
+    veto = _rolefb.veto_map(con, source="slate")
+    if veto:
+        gold_eff = {i: (0.0 if veto.get(i) == 0 else float(gold[i])) for i in gold}
+        mre = metrics.evaluate({i: eff[i] for i in eff if i in gold_eff}, gold_eff, name="effective_role")
+        mre["label"], mre["clean"] = "role-aware gold (directional — НЕ gate)", False
+        rows.append(mre)
+
+    # ML-гейт (triage): a DROP-filter, not a CV↔JD matcher. Measure ONLY actual ML-model decisions
+    # (model_version != 'cold_start') — the cold_start match_score sediment dominated the stored scores
+    # and made this read like a broken matcher (the 42%/−0.14 on a 2/3-cold_start mix). Deploy is now
+    # gated on the model's temporal holdout (triage._should_deploy), so a deployed model has passed a
+    # forward test. Omit the row when too few ML-scored jobs exist (honest "no signal" > a misleading number).
+    triage_ml = {int(r[0]): float(r[1]) / 5.0 for r in con.execute(
+        "SELECT vacancy_id, calibrated_score FROM triage_decision WHERE model_version != 'cold_start'")}
+    tscore = {i: triage_ml[i] for i in gold if i in triage_ml}
+    if len(tscore) >= 10:
         mt = metrics.evaluate(tscore, gold, name="triage")
-        mt["label"], mt["clean"] = "ML-гейт (triage)", False
+        mt["label"], mt["clean"] = "ML-гейт (triage, drop-фильтр)", False
         rows.append(mt)
 
     headline = rows[0]  # fit_score — the clean, label-independent headline

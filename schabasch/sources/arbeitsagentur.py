@@ -13,7 +13,7 @@ import base64
 import math
 import time
 
-from .. import db
+from .. import db, freshness
 from ..llm import LLMError, http_get_json
 from ..models import ErrorClass, Status
 
@@ -38,8 +38,13 @@ def search(cfg: dict, con, *, queries: list[str] | None = None) -> int:
     # Свежесть: hours_old → veröffentlichtseit (дни), если задано (инкрементальный сбор).
     hours_old = search_cfg.get("hours_old")
     veroeff_days = math.ceil(hours_old / 24) if hours_old else None
+    # CLIENT-SIDE date gate: the AA API honours veroeffentlichtseit loosely (returns 4+ day-old, even
+    # 14-month-old rows by aktuelleVeroeffentlichungsdatum). Drop anything older than the window here
+    # so stale postings never enter the pool. Null/unparseable dates pass (freshness.too_old).
+    max_age = freshness.max_post_age_days(cfg)
 
     new_count = 0
+    stale_skipped = 0
     for city in cities:
         for q in queries:
             page = 1
@@ -61,6 +66,11 @@ def search(cfg: dict, con, *, queries: list[str] | None = None) -> int:
                     refnr = j.get("refnr")
                     if not refnr:
                         continue
+                    # реальная дата публикации вакансии (не скрейпа)
+                    posted = j.get("aktuelleVeroeffentlichungsdatum")
+                    if freshness.too_old(posted, max_age):
+                        stale_skipped += 1
+                        continue
                     ort = j.get("arbeitsort") or {}
                     ext = j.get("externeUrl")
                     url = ext or f"https://www.arbeitsagentur.de/jobsuche/jobdetail/{refnr}"
@@ -76,8 +86,7 @@ def search(cfg: dict, con, *, queries: list[str] | None = None) -> int:
                         "city": ort.get("ort"),
                         "query_term": q,
                         "query_city": city,
-                        # реальная дата публикации вакансии (не скрейпа)
-                        "date_posted": j.get("aktuelleVeroeffentlichungsdatum"),
+                        "date_posted": posted,
                     })
                     if before is None:
                         new_count += 1
@@ -87,6 +96,9 @@ def search(cfg: dict, con, *, queries: list[str] | None = None) -> int:
                 page += 1
                 time.sleep(THROTTLE_S)
             time.sleep(THROTTLE_S)
+    if stale_skipped:
+        db.log_funnel(con, "ingest_stale_skip", stale_skipped, "arbeitsagentur",
+                      detail=f"older than {max_age}d by date_posted")
     db.log_funnel(con, "scrape", new_count, "arbeitsagentur")
     return new_count
 

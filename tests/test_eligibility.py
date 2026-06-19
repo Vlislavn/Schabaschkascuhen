@@ -7,6 +7,16 @@ import json
 from schabasch import db, eligibility as E
 
 
+def test_jd_hard_blocker():
+    """Deterministic clearance/citizenship blocker → structural floor; off when patterns empty."""
+    pats = [r"\b(TS/SCI|security clearance)\b", r"\bU\.?S\.? citizen"]
+    blk = E.jd_hard_blocker("Requires active TS/SCI clearance and US citizenship.", pats, floor=0.35)
+    assert blk is not None and blk[0] == 0.35 and blk[2] == "structural"
+    assert E.jd_hard_blocker("Senior Business Analyst, Frankfurt, hybrid", pats) is None
+    assert E.jd_hard_blocker("requires TS/SCI", []) is None          # empty patterns = off
+    assert E.jd_hard_blocker("x", ["(unclosed["]) is None            # malformed regex → no crash
+
+
 # --- education normalization ---------------------------------------------------------------
 
 def test_normalize_education_terms():

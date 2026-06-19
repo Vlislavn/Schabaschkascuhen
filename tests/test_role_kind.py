@@ -2,6 +2,32 @@
 from __future__ import annotations
 
 from schabasch import role_kind as rk
+from schabasch import role_feedback
+from tests.conftest import seed_scored
+
+
+def test_multiplier_behaviour_preserving_when_learning_off(cfg, con):
+    """P2 gate: con supplied but learning disabled (default) → exactly the static default."""
+    assert rk.multiplier("hands_on_engineer", cfg, con) == rk._DEFAULT_MULT["hands_on_engineer"]
+    assert rk.multiplier("hands_on_engineer", cfg, None) == rk._DEFAULT_MULT["hands_on_engineer"]
+
+
+def test_multiplier_learns_from_wrong_role_votes(con):
+    """P2: ≥ n_min golden '🙅 wrong role' votes pull the engineer multiplier below the 0.7 default
+    toward the floor; a kind voted all-fits stays at its default. Below n_min → static default."""
+    cfg = {"slate": {"role_kind_learn": {"enabled": True, "n_min": 5, "alpha": 3.0, "mult_floor": 0.5}}}
+    assert rk.multiplier("hands_on_engineer", cfg, con) == 0.7          # no votes → default
+
+    for i in range(5):                                                   # 5 wrong-role engineer votes
+        v = seed_scored(con, f"e/{i}", score=4, company="C", title="Software Engineer")
+        role_feedback.record(con, v, "hands_on_engineer", False, source="slate")
+    m = rk.multiplier("hands_on_engineer", cfg, con)
+    assert 0.5 <= m < 0.7                                                # learned DOWN from data
+
+    for i in range(5):                                                   # 5 fits votes on lead
+        v = seed_scored(con, f"l/{i}", score=4, company="C", title="Principal Engineer")
+        role_feedback.record(con, v, "lead", True, source="slate")
+    assert rk.multiplier("lead", cfg, con) == 1.0                        # all-fits → stays at default 1.0
 
 
 def test_classify_engineer_vs_lead_vs_junior():

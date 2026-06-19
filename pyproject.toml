@@ -30,7 +30,10 @@ v2 = [
   "numpy>=1.26",
   "beautifulsoup4",
   "lxml",
-  "trafilatura",
+  "trafilatura",            # browsing.extract — HTML→markdown (keyless)
+  "ddgs",                   # browsing.search — keyless DuckDuckGo (install with --override lxml>=6)
+  # NOTE: `deutschland` (Handelsregister) deliberately NOT added — its OCR stack downgrades numpy 2→1.26
+  #   and breaks the bge-m3/lightgbm pipeline (see docs/IMPORT_AUDIT.md). Registry adapter degrades.
   # kl_agent_builder: pip install -e ~/code/work/KatherLab/prototype-internal-KL
 ]
 

@@ -274,6 +274,66 @@ def _load_artifact(cfg: dict) -> dict | None:
 
 
 # ---------------------------------------------------------------------------
+# Checkpoint registry — keep the PREVIOUS model (with its metrics + date) before overwriting
+# ---------------------------------------------------------------------------
+
+def _archive_dir(cfg: dict) -> Path:
+    d = _artifact_path(cfg).parent / "archive"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _registry_path(cfg: dict) -> Path:
+    return _artifact_path(cfg).parent / "registry.jsonl"
+
+
+def _append_registry(cfg: dict, record: dict) -> None:
+    p = _registry_path(cfg)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with p.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def _checkpoint_previous(cfg: dict, *, labels_sha: str, force: bool = False) -> str | None:
+    """Archive the CURRENT triage artifact (joblib + json twin) and append a metrics+date line to
+    registry.jsonl — BEFORE train() overwrites it. No-op when there's no prior model or when the
+    labels are unchanged (train would skip anyway). Returns the archive path or None."""
+    import shutil
+    old = _load_artifact(cfg)
+    if not old:
+        return None
+    if not force and old.get("labels_sha") == labels_sha:
+        return None   # train() will no-op → nothing to checkpoint
+    path = _artifact_path(cfg)
+    if not path.exists():
+        return None
+    ts = str(old.get("trained_at") or datetime.now(timezone.utc).isoformat())
+    safe_ts = ts.replace(":", "-").replace("+", "_")
+    sha = (old.get("labels_sha") or "")[:12] or "nosha"
+    dest = _archive_dir(cfg) / f"triage_{safe_ts}_{sha}.joblib"
+    shutil.copy2(path, dest)
+    jpath = path.with_suffix(".json")
+    if jpath.exists():
+        shutil.copy2(jpath, dest.with_suffix(".json"))
+    _append_registry(cfg, {"trained_at": old.get("trained_at"), "labels_sha": old.get("labels_sha"),
+                           "n_features": old.get("n_features"), "metrics": old.get("metrics"),
+                           "archived_from": str(dest)})
+    return str(dest)
+
+
+def retrain_checkpointed(cfg: dict, con, *, force: bool = False) -> dict:
+    """Checkpoint the previous model (metrics + date) then retrain on current feedback. No-op when
+    labels are unchanged. Called on every `schabasch serve` start."""
+    label_rows = con.execute("SELECT vacancy_id, score_1_5, applied FROM label").fetchall()
+    labels_sha = _labels_hash(label_rows)
+    archived = _checkpoint_previous(cfg, labels_sha=labels_sha, force=force)
+    res = train(cfg, con, force=force)
+    if archived:
+        res["archived_from"] = archived
+    return res
+
+
+# ---------------------------------------------------------------------------
 # Public: train
 # ---------------------------------------------------------------------------
 
@@ -351,6 +411,16 @@ def train(cfg: dict, con, *, force: bool = False) -> dict:
         if calibrator:
             pred_test = calibrator.predict(pred_test)
         metrics = _compute_metrics(y[test_mask], pred_test, cutoffs)
+
+    # DEPLOY GATE (measure-then-ship): keep the prior artifact rather than overwrite it with a model
+    # that fails its own temporal holdout. Without this, train() shipped a temporal-ρ=−0.31 model.
+    floor = float(triage_cfg.get("deploy_min_spearman", 0.0))
+    if not _should_deploy(metrics, floor):
+        db.log_funnel(con, "triage_deploy_rejected", len(y),
+                      detail=f"temporal spearman={metrics.get('spearman_rho')} <= floor {floor}; "
+                             f"kept prior model")
+        return {"trained": False, "rejected": True, "reason": "failed temporal holdout",
+                "metrics": metrics, "labels_sha": labels_sha}
 
     sha = _save_artifact(cfg, reg, calibrator, n_features, labels_sha, metrics)
     return {"trained": True, "n_rows": len(y), "labels_sha": labels_sha,
@@ -579,6 +649,23 @@ def evaluate(cfg: dict, con) -> dict:
 # ---------------------------------------------------------------------------
 # Metrics
 # ---------------------------------------------------------------------------
+
+def _should_deploy(metrics: dict, floor: float) -> bool:
+    """Deploy gate (measure-then-ship): refuse to ship a triage model whose TEMPORAL-holdout
+    rank-correlation is at/below `floor` — i.e. one that fails its own forward test (the 2026-06-18
+    incident: a model with temporal spearman −0.31 was saved + served anyway, so the gate ranked
+    worse than a coin-flip forward). A missing/None spearman (holdout couldn't be computed, e.g. <2
+    temporal groups) does NOT block — the count gate (min_labels_to_train) already applied; the
+    caller logs it. random-CV would flatter the model here; only the temporal split is the honest
+    forward read, so it is the one we gate on."""
+    rho = metrics.get("spearman_rho")
+    if rho is None:
+        return True
+    rho = float(rho)
+    if rho != rho:        # NaN: holdout uncomputable/degenerate (constant preds) → can't MEASURE failure → don't block
+        return True
+    return rho > floor    # only a MEASURED ρ ≤ floor rejects (the −0.31 incident); never a non-measurement
+
 
 def _compute_metrics(y_true: np.ndarray, y_pred: np.ndarray,
                       cutoffs: dict[str, float]) -> dict:
