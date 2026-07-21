@@ -4,8 +4,45 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from schabasch import db, investigate
+import pytest
+
+from schabasch import agent_runtime, db, investigate
 from tests.conftest import seed_scored
+
+
+def test_investigate_task_is_facet_trigger_free(cfg, con, monkeypatch):
+    """Regression (measured 2026-06-21): kl's facet-coverage gate scans ONLY AgentInput.task. An
+    incidental 'current'/'today'/'now' or a bare year in `task` is mis-extracted as a required
+    research facet ('Fetch current data') that no observation covers, so it SILENTLY BLOCKS the
+    model's already-valid final_answer and the run grinds to max_turns_exhausted (all 5 of the day's
+    failing slate cards had 'today'/'currently' in the description). The job-description preview must
+    ride in AgentInput.context, leaving `task` free of spurious facets."""
+    facets = pytest.importorskip("kl_agent_builder.shared.facets")
+    vid = seed_scored(con, "u/facet", score=5, company="Acme GmbH")
+    # a description packed with the exact words kl turns into required facets
+    con.execute("UPDATE vacancy SET description=? WHERE id=?",
+                ("We are currently hiring. Join our team today — a role created in 2024.", vid))
+    con.commit()
+    investigate._ensure_schema(con)
+    row = con.execute("SELECT id,title,company,url,description,refnr,source FROM vacancy WHERE id=?",
+                      (vid,)).fetchone()
+    monkeypatch.setattr(investigate, "validate_company",  # no network in a unit test
+                        lambda *a, **k: {"company_description": "", "german_rooted": False,
+                                         "company_verified": False, "validation_source": "none"})
+    captured: dict = {}
+
+    def _capture_run(agent_fn, task, context=None):
+        captured["task"], captured["context"] = task, context
+        raise RuntimeError("stop before model")  # never reach the LLM
+
+    monkeypatch.setattr(agent_runtime, "run_agent", _capture_run)
+    investigate._investigate_row(con, row, cfg=cfg, agent_fn=lambda *a, **k: None,
+                                 company_cache={}, now="2026-06-21T00:00:00")
+
+    assert facets.extract_required_facets(captured["task"]) == ()      # the bug: this used to be non-empty
+    low = captured["task"].lower()
+    assert "today" not in low and "currently" not in low and "2024" not in captured["task"]
+    assert "currently" in str(captured["context"]).lower()             # preview preserved for the model
 
 
 def test_investigate_one_cached(cfg, con):
@@ -50,7 +87,7 @@ def _mock_agent(monkeypatch, tasks):
     monkeypatch.setattr(agent_runtime, "build_agent",
                         lambda cfg, system_prompt, max_turns=None: object())
     monkeypatch.setattr(agent_runtime, "run_agent",
-                        lambda agent_fn, task: (tasks.append(task) or _fake_agent_json()))
+                        lambda agent_fn, task, context=None: (tasks.append(task) or _fake_agent_json()))
 
 
 def test_investigate_top_skips_already_investigated(cfg, con, monkeypatch):

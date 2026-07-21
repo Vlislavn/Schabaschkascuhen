@@ -228,24 +228,57 @@ _LLMCOV_SYSTEM = (
     "You assess whether a CANDIDATE can DO a job. From the JOB, extract the 3-8 genuine MUST-HAVE "
     "requirements (core skills, tools, experience, qualifications needed to perform the role — "
     "IGNORE nice-to-haves, perks, and company boilerplate). For EACH, judge strictly from the "
-    "CANDIDATE only: present | partial | missing. Be honest — a skill not evidenced is missing. "
+    "CANDIDATE only: present | partial | missing. The CANDIDATE block lists the candidate's explicit "
+    "SKILLS and LANGUAGES first, then profile prose: mark a requirement present when that skill, tool "
+    "or language (or a clear, unambiguous equivalent) appears in that list — never mark a LISTED skill "
+    "missing. Be honest — a skill genuinely not evidenced anywhere is missing. "
     'Return ONLY JSON: {"requirements":[{"requirement": str, "verdict": "present|partial|missing"}], '
     '"missing_summary": "<short Russian phrase naming the key missing must-haves, or empty>"}'
 )
 
+# Bump when the coverage CANDIDATE block / prompt representation changes so stale cached verdicts
+# (computed against the old mangled-prose block) are ignored and recomputed — same versioning idea as
+# vacancy_embedding.model_version. Trace-independent: a representation tag, not a tuned threshold.
+_COV_CACHE_VERSION = "c2"
+
+
+def _candidate_cov_block(cv_text: str, cand_skills, languages) -> str:
+    """Assemble the CANDIDATE block fed to the coverage judge: explicit discrete SKILLS (one per
+    line) + LANGUAGES + profile prose. ROOT-CAUSE fix: the old block was prose only, with skills
+    mashed into one comma line and languages absent from full_doc (candidate._build_aspect_texts),
+    so qwen marked present skills/languages 'missing' (measured 43% of misses). An explicit candidate
+    spec is the clean signal (ConFit-v3 'non-negotiable requirements' judged against an explicit
+    candidate; claude-code parity = give the judge the cleanest structured context). No deterministic
+    post-guard — qwen stays the semantic judge, so a genuinely-absent skill still reads missing."""
+    parts: list[str] = []
+    skills = [str(s).strip() for s in (cand_skills or []) if str(s).strip()]
+    if skills:
+        parts.append("SKILLS:\n" + "\n".join(f"- {s}" for s in skills))
+    if languages:
+        langs = ", ".join(f"{k}={v}" for k, v in languages.items() if str(v).strip())
+        if langs:
+            parts.append(f"LANGUAGES: {langs}")
+    if cv_text:
+        parts.append("PROFILE:\n" + cv_text)
+    return "\n\n".join(parts)
+
 
 def _llm_coverage(con, *, cache_key: str, jd_title: str, jd_desc: str, cv_text: str,
-                  client) -> tuple[float, str, list[dict]]:
+                  client, cand_skills=None, languages=None) -> tuple[float, str, list[dict]]:
     """LLM per-requirement coverage in [0,1] = (present + 0.5*partial)/total, the missing-summary,
     AND the per-requirement list [{requirement, verdict}] (for the card's skill breakdown). Cached
-    per (CV,JD). The strongest single fit signal in offline eval. (0.5, '', []) on failure."""
+    per (CV,JD). The strongest single fit signal in offline eval. (0.5, '', []) on failure.
+
+    cand_skills + languages (optional) are rendered as an explicit SKILLS/LANGUAGES list ahead of the
+    profile prose so the judge stops false-flagging listed skills as missing — see _candidate_cov_block."""
     row = con.execute("SELECT coverage, missing, requirements FROM llmcov_cache WHERE cache_key = ?",
                       (cache_key,)).fetchone()
     if row is not None and row["requirements"] is not None:
         return float(row["coverage"]), (row["missing"] or ""), json.loads(row["requirements"])
     cov, miss, reqs = 0.5, "", []
     try:
-        user = f"CANDIDATE:\n{cv_text[:1500]}\n\nJOB:\n{jd_title}\n{(jd_desc or '')[:3000]}"
+        cand_block = _candidate_cov_block(cv_text, cand_skills, languages)
+        user = f"CANDIDATE:\n{cand_block}\n\nJOB:\n{jd_title}\n{(jd_desc or '')[:3000]}"
         obj = client.chat_json(_LLMCOV_SYSTEM, user)
         for r in (obj.get("requirements") or []):
             if isinstance(r, dict):
@@ -303,8 +336,19 @@ def fit_from_feature(feat: dict, weights: dict, *, sparse_scale: float = _SPARSE
     raw_sparse = _g("bgem3_sparse")
     sparse_norm = (min(1.0, raw_sparse / sparse_scale) if (raw_sparse is not None and sparse_scale)
                    else None)
+    # NULL-vs-ZERO guard: extract_features writes fit_hyre=0.0 (it's in FEATURE_NAMES) before rerank_scored
+    # runs, and rerank only OVERWRITES it when HyRE actually generates. A LABELED job that never enters
+    # the SCORED/SLATED rerank pool (eval gold) therefore keeps the 0.0 default — and since HyRE carries
+    # the heaviest weight (0.7), that phantom zero drags the headline fit to ~0 (the under-scoring bug for
+    # the 16 labeled gold jobs). A REAL HyRE score is _cosine01 = (cos+1)/2 ∈ (0,1], never exactly 0.0
+    # (that only happens on a degenerate/missing vector), so treat 0.0 as ABSENT → the blend renormalizes
+    # over the present signals (sparse) instead of zeroing out. Measured on 100 real labels: effective
+    # pairwise 0.804→0.814, spearman 0.540→0.558, ndcg@10 flat (no regression).
+    fit_hyre = _g("fit_hyre")
+    if fit_hyre == 0.0:
+        fit_hyre = None
     return _blend_fit(xenc_full=_g("xenc_full"), llm_cov=_g("llm_cov"),
-                      fit_hyre=_g("fit_hyre"), sparse_norm=sparse_norm, weights=weights)
+                      fit_hyre=fit_hyre, sparse_norm=sparse_norm, weights=weights)
 
 
 def bgem3_sparse_scores(model, cv_text: str, jd_texts: list[str]) -> list[float]:
@@ -706,39 +750,29 @@ def rerank_scored(cfg: dict, con, *, top_k: int | None = None) -> dict:
     # Score the FULL slate-candidate pool (SCORED + SLATED). The slate re-admits unviewed SLATED
     # jobs (UC 9a); if they aren't scored here they'd get fit=0 and be wrongly de-ranked off the
     # slate for missing data rather than genuine low fit.
+    # Cascade freshness (Wang 2011 / Matsubara 2020): stage-2 processes the candidates it hasn't
+    # reranked yet (xenc_full NULL), NOT "top-k of all then drop the fresh ones" — the latter let the
+    # always-fresh top-30 gems starve newer SCORED jobs of fit forever (exploit slots empty). An empty
+    # result means nothing needs (re)scoring → return WITHOUT loading the 2 GB reranker. xenc_full is
+    # written unconditionally per finished row, so it's the faithful processed-sentinel; extract_features
+    # REPLACEs feature_json (wiping xenc) on a re-embed, so a genuine content change naturally re-enters.
+    # ORDER BY last_seen DESC FIRST: align the bounded top_k budget with what the daily slate actually
+    # shows (last_seen within slate.fresh_days) — among judge-score ties the freshest jobs would
+    # otherwise lose to oldest-id, so the slate's fresh pool starved while old judge-2 cards got reranked.
     rows = con.execute(
         """SELECT v.id, v.title, v.description
            FROM vacancy v
            JOIN (SELECT vacancy_id, MAX(id) mid FROM judge_score GROUP BY vacancy_id) m
              ON m.vacancy_id = v.id
            JOIN judge_score js ON js.id = m.mid
+           LEFT JOIN vacancy_feature vf ON vf.vacancy_id = v.id
            WHERE v.status IN (?, ?)
-           ORDER BY js.score DESC
+             AND (vf.vacancy_id IS NULL OR json_extract(vf.feature_json, '$.xenc_full') IS NULL)
+           ORDER BY v.last_seen DESC, js.score DESC
            LIMIT ?""",
         (Status.SCORED.value, Status.SLATED.value, k),
     ).fetchall()
 
-    if not rows:
-        return {"reranked": 0}
-
-    # Skip rows that already carry a fresh xenc_full — re-ranking is deterministic, so re-scoring an
-    # already-ranked job is pure waste. extract_features REPLACEs feature_json (wiping xenc) on a
-    # re-embed, so a genuine content change naturally re-enters here. If NOTHING needs (re)scoring,
-    # return WITHOUT loading the 2 GB reranker (the per-tick model load was the real cost).
-    # ONE query for the candidates' feature_json (not feature_row per-row, which re-runs _ensure_schema).
-    _ids = [r["id"] for r in rows]
-    _ph = ",".join("?" * len(_ids))
-    _fj = {row["vacancy_id"]: row["feature_json"] for row in con.execute(
-        f"SELECT vacancy_id, feature_json FROM vacancy_feature WHERE vacancy_id IN ({_ph})", _ids
-    ).fetchall()}
-
-    def _has_xenc(vid: int) -> bool:
-        try:
-            return json.loads(_fj.get(vid) or "{}").get("xenc_full") is not None
-        except (TypeError, json.JSONDecodeError):
-            return False
-
-    rows = [r for r in rows if not _has_xenc(r["id"])]
     if not rows:
         return {"reranked": 0, "skipped": "all_fresh"}
 
@@ -780,7 +814,10 @@ def rerank_scored(cfg: dict, con, *, top_k: int | None = None) -> dict:
     elig_mid = float(e_cfg.get("mid", 0.6))
     elig_soft_lift = float(e_cfg.get("soft_lift_threshold", 0.55))
     elig_soft_lift_cov_min = float(e_cfg.get("soft_lift_cov_min", 0.0))
-    cand_quals = _elig.candidate_quals(load_candidate(con))   # education/years/langs (once)
+    cand_profile = load_candidate(con)                        # once: reused for quals + coverage block
+    cand_quals = _elig.candidate_quals(cand_profile)          # education/years/langs
+    cand_cov_skills = (cand_profile or {}).get("skills") or []   # explicit list → coverage judge
+    cand_cov_langs = (cand_profile or {}).get("languages") or {}
 
     # One qwen client shared by HyRE, LLM-coverage, and eligibility.
     qwen = None
@@ -842,10 +879,11 @@ def rerank_scored(cfg: dict, con, *, top_k: int | None = None) -> dict:
         llm_cov = None
         miss = ""
         if llmcov_on and qwen is not None:
-            llm_cov, miss, llm_reqs = _llm_coverage(con, cache_key=f"{cv_hash}:{ch}",
+            llm_cov, miss, llm_reqs = _llm_coverage(con, cache_key=f"{cv_hash}:{ch}:{_COV_CACHE_VERSION}",
                                                     jd_title=row["title"] or "",
                                                     jd_desc=row["description"] or "",
-                                                    cv_text=cv, client=qwen)
+                                                    cv_text=cv, client=qwen,
+                                                    cand_skills=cand_cov_skills, languages=cand_cov_langs)
             feat["llm_cov"] = llm_cov
             feat["llm_cov_missing"] = miss
             feat["llm_cov_reqs"] = llm_reqs   # [{requirement, verdict}] → card skill breakdown

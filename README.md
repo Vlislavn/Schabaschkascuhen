@@ -37,7 +37,7 @@ cp config/profile.example.yaml config/profile.yaml
 Optional deep-search integration:
 
 ```bash
-pip install -e ~/code/work/KatherLab/prototype-internal-KL
+pip install -e <local prototype-internal-KL checkout>
 ```
 
 ## Use

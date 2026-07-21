@@ -57,24 +57,27 @@ def _user_msg(row, truncate: int) -> str:
 
 
 def _filter_card(con, vacancy_id: int, card: Card, cfg: dict | None = None) -> str:
-    """Авторитетный фильтр по карточке. Возвращает 'normalized' | 'filtered'."""
-    if card.work_mode == "remote":
+    """Авторитетный фильтр по карточке. Каждый drop гейтится на repellents ЭТОГО пользователя
+    (multi-user fix: раньше отталкиватели пользователя №1 удаляли вакансии пользователя №2).
+    Возвращает 'normalized' | 'filtered'."""
+    from .hardfilters import active_repellents
+    reps = active_repellents(cfg)
+    if "remote-only" in reps and card.work_mode == "remote":
         db.set_status(con, vacancy_id, Status.FILTERED, filter_reason=FilterReason.REMOTE_ONLY,
                       card_json=card.to_json())
         return "filtered"
     # GEO no longer DROPS here. Far-but-in-Germany onsite/hybrid jobs (a München/Berlin role the user
     # might take for a strong magnet) are KEPT and MARKED 📍 at slate-build time + routed to the
-    # explore slots (geo.geo_class), per the user's "show far jobs, don't drop them" ask. Remote-only
-    # and a German-language reality remain hard drops (real repellents).
-    if card.language_reality == "de":
+    # explore slots (geo.geo_class), per the user's "show far jobs, don't drop them" ask.
+    if "hidden-german" in reps and card.language_reality == "de":
         db.set_status(con, vacancy_id, Status.FILTERED, filter_reason=FilterReason.LANGUAGE_DE,
                       card_json=card.to_json())
         return "filtered"
-    # Temp-agency (Zeitarbeit/Personaldienstleister) is a hard repellent. hardfilters drops the
-    # SCRAPED is_temp_agency flag; this catches the ones only the normalizer's read reveals
-    # (temp_agency_guess). slop is NOT hard-dropped here — it's noisy + handled by the judge's graded
-    # slop penalty (recall-first; a strong job with a sloppy ad shouldn't vanish).
-    if card.temp_agency_guess:
+    # Temp-agency (Zeitarbeit/Personaldienstleister): hardfilters drops the SCRAPED is_temp_agency
+    # flag; this catches the ones only the normalizer's read reveals (temp_agency_guess). slop is
+    # NOT hard-dropped here — it's noisy + handled by the judge's graded slop penalty
+    # (recall-first; a strong job with a sloppy ad shouldn't vanish).
+    if "temp-agency" in reps and card.temp_agency_guess:
         db.set_status(con, vacancy_id, Status.FILTERED, filter_reason=FilterReason.TEMP_AGENCY,
                       card_json=card.to_json())
         return "filtered"

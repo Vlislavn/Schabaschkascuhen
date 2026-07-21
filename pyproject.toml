@@ -16,6 +16,7 @@ dependencies = [
   "fastapi",
   "uvicorn",
   "typer",
+  "pypdf",                   # candidate._read_cv — PDF CVs uploaded via bot registration
   # python-jobspy ставится отдельно editable из форка: pip install -e "~/code/from GH/JobSpy"
 ]
 
@@ -34,7 +35,7 @@ v2 = [
   "ddgs",                   # browsing.search — keyless DuckDuckGo (install with --override lxml>=6)
   # NOTE: `deutschland` (Handelsregister) deliberately NOT added — its OCR stack downgrades numpy 2→1.26
   #   and breaks the bge-m3/lightgbm pipeline (see docs/IMPORT_AUDIT.md). Registry adapter degrades.
-  # kl_agent_builder: pip install -e ~/code/work/KatherLab/prototype-internal-KL
+  # kl_agent_builder: pip install -e <local prototype-internal-KL checkout>
 ]
 
 [project.scripts]

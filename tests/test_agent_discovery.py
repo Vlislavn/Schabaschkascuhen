@@ -63,7 +63,7 @@ def test_agent_discovery_with_mocked_agent(con, cfg, monkeypatch):
     ]
 
     def _fake_agent(cfg, *, system_prompt, max_turns=8):
-        def _run(task: str) -> str:
+        def _run(task: str, context=None) -> str:
             return json.dumps(FAKE_POSTINGS)
         return _run
 
@@ -90,7 +90,7 @@ def test_agent_discovery_skips_empty_url(con, cfg, monkeypatch):
     ]
 
     def _fake_agent(cfg, *, system_prompt, max_turns=8):
-        def _run(task: str) -> str:
+        def _run(task: str, context=None) -> str:
             return json.dumps(FAKE_POSTINGS)
         return _run
 
@@ -105,7 +105,7 @@ def test_agent_discovery_bad_json_graceful(con, cfg, monkeypatch):
     from schabasch.sources import agent_discovery
 
     def _fake_agent(cfg, *, system_prompt, max_turns=8):
-        def _run(task: str) -> str:
+        def _run(task: str, context=None) -> str:
             return "not valid json [[[{"
         return _run
 
@@ -161,7 +161,7 @@ def test_investigate_mocked_agent_populates_sidecar(con, cfg, monkeypatch):
     }
 
     def _fake_agent(cfg, *, system_prompt, max_turns=8):
-        def _run(task: str) -> str:
+        def _run(task: str, context=None) -> str:
             return json.dumps(enrichment)
         return _run
 
@@ -188,7 +188,7 @@ def test_investigate_deterministic_closed_not_a_guess(con, cfg, monkeypatch):
     enrichment = {"verdict": "ok", "notes": "Real role.", "company_known": True}
 
     def _fake_agent(cfg, *, system_prompt, max_turns=8):
-        def _run(task: str) -> str:
+        def _run(task: str, context=None) -> str:
             return json.dumps(enrichment)
         return _run
 
@@ -205,7 +205,7 @@ def test_investigate_agent_error_increments_errors(con, cfg, monkeypatch):
     _seed_scored(con, "u/inv3", score=3)
 
     def _fake_agent(cfg, *, system_prompt, max_turns=8):
-        def _run(task: str) -> str:
+        def _run(task: str, context=None) -> str:
             return "not json"
         return _run
 

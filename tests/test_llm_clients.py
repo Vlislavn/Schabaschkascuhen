@@ -45,7 +45,7 @@ def test_router_builds_openai_client():
 def test_role_available_local_needs_no_key():
     cfg = {"llm": {"roles": {
         "deep_reasoning": {"client": "openai", "base_url": "http://localhost:8082/v1"},
-        "sota": {"client": "openai", "base_url": "https://api.kather.ai/v1", "api_key_env": "NOPE_MISSING"},
+        "sota": {"client": "openai", "base_url": "https://api.example.com/v1", "api_key_env": "NOPE_MISSING"},
     }}}
     assert lc.role_available(cfg, "deep_reasoning") is True   # localhost → assume up
     assert lc.role_available(cfg, "sota") is False            # remote, no key → unavailable
@@ -92,10 +92,10 @@ def test_openai_chat_json_happy_path(monkeypatch):
         return _ok('{"score": 4, "why": "ok"}')
 
     monkeypatch.setattr(lc.requests, "post", fake_post)
-    c = lc.OpenAIClient(model="sota", base_url="https://api.kather.ai/v1", api_key="sk-x")
+    c = lc.OpenAIClient(model="sota", base_url="https://api.example.com/v1", api_key="sk-x")
     out = c.chat_json("sys", "user")
     assert out == {"score": 4, "why": "ok"}
-    assert captured["url"] == "https://api.kather.ai/v1/chat/completions"
+    assert captured["url"] == "https://api.example.com/v1/chat/completions"
     assert captured["auth"] == "Bearer sk-x"
     assert captured["body"]["model"] == "sota"
 
@@ -157,13 +157,13 @@ def test_agent_params_falls_back_to_ollama_when_35b_down(monkeypatch):
 
 
 def test_agent_params_remote_role_used_as_is_no_ping(monkeypatch):
-    """A REMOTE agent role (e.g. api.kather.ai) is never probed — no co-load/headroom concern."""
+    """A REMOTE agent role (any non-localhost URL) is never probed — no co-load/headroom concern."""
     monkeypatch.setattr(lc, "_endpoint_reachable",
                         lambda *a, **k: pytest.fail("must not ping a remote agent role"))
     cfg = {"llm": {"roles": {"agent": {"client": "openai", "model": "sota",
-            "base_url": "https://api.kather.ai/v1", "api_key": "k"}}}}
+            "base_url": "https://api.example.com/v1", "api_key": "k"}}}}
     p = lc.agent_client_params(cfg)
-    assert p["base_url"] == "https://api.kather.ai/v1" and p["model"] == "sota"
+    assert p["base_url"] == "https://api.example.com/v1" and p["model"] == "sota"
 
 
 def test_agent_params_ollama_default_used_as_is_no_ping(monkeypatch):

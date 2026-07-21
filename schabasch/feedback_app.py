@@ -9,11 +9,12 @@ import re
 import threading
 import time
 from datetime import date, datetime, timezone
+from pathlib import Path
 
 from fastapi import Request   # module-level so `from __future__ annotations` strings resolve for FastAPI
 from pydantic import BaseModel
 
-from . import db, memory_guard, slate
+from . import db, memory_guard, slate, users
 from .i18n import normalize_lang, t
 from .models import FEEDBACK_TO_SCORE, FilterReason, Status
 
@@ -37,6 +38,7 @@ class Feedback(BaseModel):
     vacancy_id: int
     action: str  # bad | good | star | applied
     note: str | None = None  # WS2: free-text → label.why_freetext → judge few-shot (durable signal)
+    user: str = "default"  # multi-user: which user's DB the write targets
 
 
 class TaskStatusBody(BaseModel):
@@ -44,6 +46,7 @@ class TaskStatusBody(BaseModel):
 
     task_id: int
     status: str  # open | accounted | wontfix
+    user: str = "default"  # multi-user: which user's DB the write targets
 
 
 class RoleFeedback(BaseModel):
@@ -52,6 +55,28 @@ class RoleFeedback(BaseModel):
 
     vacancy_id: int
     fits: bool
+    user: str = "default"  # multi-user: which user's DB the write targets
+
+
+class QueriesBody(BaseModel):
+    """Тело POST /update-queries — правка поисковых запросов после регистрации (через бота)."""
+
+    user: str
+    queries: list[str]
+    mode: str = "replace"  # replace | add
+
+
+class RegisterBody(BaseModel):
+    """Тело POST /register — self-service регистрация 2-го пользователя через Telegram-бота.
+    cv_text = CV plain-текстом; cv_path = файл, скачанный ботом на этот же хост (бот — дочерний
+    процесс сервера). queries=None → вывести из CV (target_roles)."""
+
+    chat_id: int
+    name: str = ""
+    cv_text: str | None = None
+    cv_path: str | None = None
+    city: str
+    queries: list[str] | None = None
 
 
 def _con(cfg: dict):
@@ -67,8 +92,16 @@ _FETCH_LOCK = threading.Lock()
 # distinct from `running` which stays True through the slow progressive investigation that follows).
 # fetch_skipped: the startup fetch was skipped because data was still fresh (refetch_after_hours) →
 # the UI + bot prompt "data is N h old, не обновлялось — refetch?". data_age_hours = how old.
-_FETCH_STATE: dict = {"running": False, "started": None, "finished": None, "summary": None,
-                      "error": None, "slate_ready": False, "fetch_skipped": False, "data_age_hours": None}
+# Multi-user: ONE state dict PER user (bob polling /fetch-status must not see alina's progress);
+# the LOCK stays a single global — one model-heavy tick at a time on this memory-constrained Mac.
+_FETCH_STATE: dict[str, dict] = {}
+
+
+def _fetch_state(user: str = "default") -> dict:
+    """The per-user fetch/progress state (created idle on first access)."""
+    return _FETCH_STATE.setdefault(user, {
+        "running": False, "started": None, "finished": None, "summary": None,
+        "error": None, "slate_ready": False, "fetch_skipped": False, "data_age_hours": None})
 
 # Human-readable pipeline stages for the /fetch progress (the "написано scrape, непонятно что это"
 # fix). Ordered as nightly_tick runs them; `heavy` marks model-loading stages (qwen/bge). Only some
@@ -92,10 +125,11 @@ _STAGE_BY_CODE = {s["code"]: s for s in _FETCH_STAGES}
 _STAGE_INDEX = {s["code"]: i for i, s in enumerate(_FETCH_STAGES)}
 
 
-def _run_tick_background(cfg: dict, *, german: bool, tertiary: bool) -> None:
+def _run_tick_background(cfg: dict, *, german: bool, tertiary: bool, user: str = "default") -> None:
     # EVERYTHING (the import + db.connect too) is inside the try so the finally ALWAYS releases the
     # single-flight lock + clears `running` — a failure in connect/import must not leak the lock and
     # wedge /fetch into a permanent 409 with running=True forever.
+    st = _fetch_state(user)
     con = None
     try:
         from . import memory_guard, pipeline
@@ -108,20 +142,20 @@ def _run_tick_background(cfg: dict, *, german: bool, tertiary: bool) -> None:
         memory_guard.require_headroom("fetch new jobs (qwen + bge models)")
         con = db.connect(cfg["paths"]["db"])
         summary = pipeline.nightly_tick(cfg, con, german_queries=german, tertiary=tertiary)
-        _FETCH_STATE["summary"] = {k: summary.get(k) for k in
-                                   ("scrape_jobspy", "scrape_aa", "dedup_fuzzy", "normalize",
-                                    "judge", "rerank", "slate", "delta")}
-        _FETCH_STATE["error"] = None
+        st["summary"] = {k: summary.get(k) for k in
+                         ("scrape_jobspy", "scrape_aa", "dedup_fuzzy", "normalize",
+                          "judge", "rerank", "slate", "delta")}
+        st["error"] = None
     except memory_guard.MemoryHeadroomError:
         # store a CODE; /fetch-status localizes it to the page language (the thread has no lang)
-        _FETCH_STATE["error"] = "@memory"
+        st["error"] = "@memory"
     except Exception as e:  # noqa: BLE001 — surface, don't crash the worker thread
-        _FETCH_STATE["error"] = f"{type(e).__name__}: {e}"
+        st["error"] = f"{type(e).__name__}: {e}"
     finally:
         if con is not None:
             con.close()
-        _FETCH_STATE["running"] = False
-        _FETCH_STATE["finished"] = datetime.now(timezone.utc).isoformat()
+        st["running"] = False
+        st["finished"] = datetime.now(timezone.utc).isoformat()
         _FETCH_LOCK.release()
 
 
@@ -150,16 +184,46 @@ def _refetch_guard(con, cfg: dict, *, force: bool) -> tuple[bool, str | None]:
         return False, None
     age = _hours_since_last_fetch(con)
     if age is not None and age < after:
+        # A "fresh" stamp on an EMPTY DB is poison, not freshness: GET /slate.json on a
+        # never-fetched user runs build_slate, which logs the `slate` funnel row this guard
+        # keys on. Live finding 2026-07-03: a freshly registered user's FIRST fetch was
+        # skipped as "fetched 0.1h ago" after the bot merely read his empty slate.
+        if int(con.execute("SELECT COUNT(*) FROM vacancy").fetchone()[0]) == 0:
+            return False, None
         return True, (f"↻ data fetched {age:.1f}h ago (< {after:.0f}h) — skipping startup fetch; the "
                       f"recent slate stands. `schabasch serve --refetch` to force a fresh fetch.")
     return False, None
 
 
-def _run_startup_pipeline(cfg: dict, *, seed: int = 2, dry: bool = False, quiet: bool = False) -> None:
+def _existing_slate_size(cfg: dict, con) -> int:
+    """Return whether a usable slate can be served without model or network work.
+
+    Deliberately read-only: slate.build_slate() logs a `slate` funnel stage, and the startup refetch
+    guard treats that as a completed fetch.
+    """
+    today = date.today().isoformat()
+    row = con.execute("SELECT COUNT(*) FROM slate_entry WHERE slate_date = ?", (today,)).fetchone()
+    if row and int(row[0] or 0) > 0:
+        return int(row[0])
+    row = con.execute(
+        "SELECT COUNT(*) FROM vacancy WHERE status IN (?, ?)",
+        (Status.SCORED.value, Status.SLATED.value),
+    ).fetchone()
+    n = int(row[0] or 0) if row else 0
+    if n <= 0:
+        return 0
+    slate_cfg = cfg.get("slate", {}) or {}
+    cap = int(slate_cfg.get("exploit", 8)) + int(slate_cfg.get("explore", 2))
+    return min(n, cap)
+
+
+def _run_startup_pipeline(cfg: dict, *, seed: int = 2, dry: bool = False, quiet: bool = False,
+                          fast_ready: bool = True, user: str = "default") -> None:
     """On `schabasch serve` start: retrain (checkpointing the previous model) → full fetch (no upfront
-    investigate) → build slate → investigate the top-`seed` cards, flip slate_ready (the bot greets) →
-    keep investigating the rest TOP→DOWN so cards enrich 'on the go'. Single-flight via _FETCH_LOCK;
-    heavy stages are memory-gated inside nightly_tick + before each progressive agent run.
+    investigate) → build slate → investigate the top-`seed` cards. With fast_ready=True, an already
+    available slate is exposed immediately and the fresh high-quality fetch continues in the background;
+    on a cold DB the bot still waits for the first built slate. Single-flight via _FETCH_LOCK; heavy
+    stages are memory-gated inside nightly_tick + before each progressive agent run.
 
     Emits RICH console logging (banner + phase headers + per-card lines) so a ~15-30 min run is legible;
     `quiet=True` mutes it. `nightly_tick` prints the per-stage ▶/✓ lines itself."""
@@ -170,6 +234,7 @@ def _run_startup_pipeline(cfg: dict, *, seed: int = 2, dry: bool = False, quiet:
         if not quiet:
             print(msg, flush=True)
 
+    st = _fetch_state(user)
     con = None
     t_start = time.monotonic()
     try:
@@ -177,10 +242,13 @@ def _run_startup_pipeline(cfg: dict, *, seed: int = 2, dry: bool = False, quiet:
         from datetime import date as _date
 
         from . import investigate, memory_guard, pipeline, slate as _slate, triage
-        _FETCH_STATE.update(running=True, started=datetime.now(timezone.utc).isoformat(),
-                            finished=None, summary=None, error=None, slate_ready=False,
-                            fetch_skipped=False)
+        st.update(running=True, started=datetime.now(timezone.utc).isoformat(),
+                  finished=None, summary=None, error=None, slate_ready=False,
+                  fetch_skipped=False)
         con = db.connect(cfg["paths"]["db"])
+        existing_n = _existing_slate_size(cfg, con) if fast_ready else 0
+        if existing_n:
+            st["slate_ready"] = True
         memory_guard.configure_from_cfg(cfg)
         memory_guard.start_watchdog()
 
@@ -188,32 +256,35 @@ def _run_startup_pipeline(cfg: dict, *, seed: int = 2, dry: bool = False, quiet:
         counts = dict(con.execute("SELECT status, COUNT(*) FROM vacancy GROUP BY status").fetchall())
         plan = " · ".join(("⏳" if s["heavy"] else "") + s["code"] for s in _FETCH_STAGES)
         _say("")
-        _say("═══ schabasch startup pipeline" + ("  (DRY — feedback NOT saved)" if dry else "") + " ═══")
+        _say("═══ schabasch startup pipeline" + (f"  [user: {user}]" if user != "default" else "")
+             + ("  (DRY — feedback NOT saved)" if dry else "") + " ═══")
         _say("  plan:  retrain → fetch → slate → investigate (top→down)")
+        if existing_n:
+            _say(f"  ready: existing slate is available now ({existing_n} cards); fresh fetch continues in background")
         _say("  pending:  " + " · ".join(f"{v} {k}" for k, v in sorted(counts.items())))
         _say(f"  stages:  {plan}      (⏳ = loads a model)")
-        _say("  est ~15-30 min — the LinkedIn scrape (~10-15 min) is the long pole. Follow the ▶/✓ lines below.")
+        _say("  est depends on LinkedIn + model backlog; follow the ▶/✓ lines below.")
         _say("")
 
         # 1) retrain the feedback model, checkpointing the previous one (no-op if labels unchanged)
         _say("▶ [1/3] retrain — model on your feedback …")
         try:
             r = triage.retrain_checkpointed(cfg, con)
-            _FETCH_STATE["retrain"] = r
+            st["retrain"] = r
             rmsg = ("skipped (labels unchanged)" if r.get("skipped")
                     else f"trained on {r.get('n_rows')} labels" if r.get("trained") else str(r)[:60])
             _say(f"  ✓ retrain → {rmsg}")
         except Exception as e:  # noqa: BLE001 — a retrain failure must not block the fetch/serve
-            _FETCH_STATE["retrain"] = {"error": f"{type(e).__name__}: {e}"}
+            st["retrain"] = {"error": f"{type(e).__name__}: {e}"}
             _say(f"  ✓ retrain → error: {e}")
 
         # 2) full fetch (always), WITHOUT the upfront agentic batch — progressive does it below.
         #    nightly_tick prints the per-stage ▶/✓ lines (pipeline.VERBOSE).
         _say("▶ [2/3] fetch — scrape → features → normalize → judge → rerank → slate → enrich")
         summary = pipeline.nightly_tick(cfg, con, run_investigate=False)
-        _FETCH_STATE["summary"] = {k: summary.get(k) for k in
-                                   ("scrape_jobspy", "scrape_aa", "dedup_fuzzy", "normalize",
-                                    "judge", "rerank", "slate", "delta")}
+        st["summary"] = {k: summary.get(k) for k in
+                         ("scrape_jobspy", "scrape_aa", "dedup_fuzzy", "normalize",
+                          "judge", "rerank", "slate", "delta")}
 
         # 3) progressive investigation, top→down; greet after the seed is done
         today = _date.today().isoformat()
@@ -223,8 +294,8 @@ def _run_startup_pipeline(cfg: dict, *, seed: int = 2, dry: bool = False, quiet:
         for i, c in enumerate(cards):
             vid = c["vacancy_id"]
             if i >= seed:   # the seed is ready → let the bot greet; keep enriching the rest
-                if not _FETCH_STATE["slate_ready"]:
-                    _FETCH_STATE["slate_ready"] = True
+                if not st["slate_ready"]:
+                    st["slate_ready"] = True
                     _say(f"  ✅ slate ready ({n} cards) — the bot greets now; enriching the rest in the background")
                 try:
                     memory_guard.require_headroom("investigate (agent)")
@@ -239,28 +310,28 @@ def _run_startup_pipeline(cfg: dict, *, seed: int = 2, dry: bool = False, quiet:
                 verdict = f"error: {e}"
                 logging.getLogger(__name__).warning("startup investigate vid=%s: %s", vid, e)
             _say(f"     {'· cached' if verdict == 'cached' else '✓ ' + str(verdict)} ({int(time.monotonic() - ti)}s)")
-        _FETCH_STATE["error"] = None
+        st["error"] = None
     except memory_guard.MemoryHeadroomError:  # type: ignore[name-defined]
-        _FETCH_STATE["error"] = "@memory"
+        st["error"] = "@memory"
         _say("✗ startup aborted — low memory")
     except Exception as e:  # noqa: BLE001 — surface, never crash the serve process
-        _FETCH_STATE["error"] = f"{type(e).__name__}: {e}"
+        st["error"] = f"{type(e).__name__}: {e}"
         _say(f"✗ startup error: {type(e).__name__}: {e}")
     finally:
         if con is not None:
             con.close()
-        _FETCH_STATE["running"] = False
-        _FETCH_STATE["slate_ready"] = True   # never leave the bot polling forever
-        _FETCH_STATE["finished"] = datetime.now(timezone.utc).isoformat()
+        st["running"] = False
+        st["slate_ready"] = True   # never leave the bot polling forever
+        st["finished"] = datetime.now(timezone.utc).isoformat()
         _FETCH_LOCK.release()
         m, s = divmod(int(time.monotonic() - t_start), 60)
-        err = _FETCH_STATE.get("error")
+        err = st.get("error")
         _say(f"✓ startup complete in {m}m {s:02d}s" + (f" (with error: {err})" if err else ""))
         _say("")
 
 
 def create_app(cfg: dict, dry: bool = False):
-    from fastapi import FastAPI
+    from fastapi import FastAPI, HTTPException
     from fastapi.responses import HTMLResponse, JSONResponse
 
     app = FastAPI(title="Schabaschkascuhen Slate")
@@ -268,22 +339,119 @@ def create_app(cfg: dict, dry: bool = False):
     def _lang(request: Request) -> str:
         return normalize_lang(request.query_params.get("lang"))
 
+    # ── multi-user: resolve the target user's cfg per request (the _lang pattern) ────────────────
+    # "default" = the cfg passed to create_app (tests hand in temp paths — must stay authoritative).
+    # Non-default users are loaded FRESH each request (one yaml read + merge, ~ms) — caching them
+    # made /update-queries edits invisible until restart (live finding 2026-07-03).
+    _cfg_cache: dict[str, dict] = {"default": cfg}
+
+    def _cfg_for(user: str) -> dict:
+        if user in _cfg_cache:
+            return _cfg_cache[user]
+        return users.load(user)  # FileNotFoundError/ValueError for unknown keys
+
+    def _ucfg(request: Request) -> tuple[str, dict]:
+        """(user, cfg) from ?user= — 404 on an unknown key so a typo can't fall into another DB."""
+        u = request.query_params.get("user") or "default"
+        try:
+            return u, _cfg_for(u)
+        except (FileNotFoundError, ValueError):
+            raise HTTPException(status_code=404, detail=f"unknown user {u!r}")
+
+    def _ucfg_body(user: str):
+        """cfg for a POST body's user field, or an error response (same 404 contract as _ucfg)."""
+        try:
+            return _cfg_for(user or "default"), None
+        except (FileNotFoundError, ValueError):
+            return None, JSONResponse({"ok": False, "error": f"unknown user {user!r}"},
+                                      status_code=404)
+
+    @app.get("/users.json")
+    def users_json():
+        # The bot's registry: telegram chat_id → user key. Adding a user = dropping a yaml into
+        # config/users/ — the bot picks it up on its next poll, no restart.
+        return {"users": users.registry(), "max_users": users.MAX_USERS}
+
+    @app.get("/geo-resolve")
+    def geo_resolve(city: str = ""):
+        # Step-level city validation for the bot's registration flow (Doherty: immediate feedback
+        # at the step, not a 422 after the whole conversation). Offline + fuzzy + RU aliases +
+        # multi-city («Франкфурт, Мюнхен») + nationwide («вся Германия») — all live findings.
+        from . import registration
+        return registration.resolve_cities(city)
+
+    @app.get("/queries")
+    def get_queries(request: Request):
+        # The bot's /queries read: what this user's search currently looks for.
+        _, ucfg = _ucfg(request)
+        return {"queries_en": (ucfg.get("search") or {}).get("queries_en") or []}
+
+    @app.post("/update-queries")
+    def update_queries(body: QueriesBody):
+        """Post-registration query edit (live finding: «помимо тех, ещё agentic AI и медицина»).
+        Overlay users only — the default user's queries live in the hand-commented profile.yaml,
+        which a yaml round-trip would strip."""
+        from . import registration
+        if body.user in ("default", ""):
+            return JSONResponse({"ok": False, "error": "the default user's queries are edited in "
+                                                       "config/profile.yaml"}, status_code=400)
+        try:
+            ucfg = users.load(body.user)
+        except (FileNotFoundError, ValueError):
+            return JSONResponse({"ok": False, "error": f"unknown user {body.user!r}"}, status_code=404)
+        queries = [q.strip() for q in body.queries if q and q.strip()]
+        if body.mode == "add":
+            current = (ucfg.get("search") or {}).get("queries_en") or []
+            seen = {q.lower() for q in current}
+            queries = current + [q for q in queries if q.lower() not in seen]
+        if not queries:
+            return JSONResponse({"ok": False, "error": "queries must be a non-empty list"},
+                                status_code=422)
+        users.update_overlay(body.user, {"search": {"queries_en": list(queries),
+                                                    "queries_de": list(queries)}})
+        return {"ok": True, "queries_en": queries}
+
+    @app.post("/register")
+    def register(body: RegisterBody):
+        """Create user #2: overlay yaml + isolated DB + CV extraction (qwen via ollama, ~1 min —
+        runs in FastAPI's threadpool). 409 cap/duplicate, 422 bad input (may carry city
+        suggestions), 500 extraction failure (fully rolled back)."""
+        from . import registration
+        if body.cv_path:
+            # bot and server share the host by design (the bot is our child process); still,
+            # never read arbitrary paths blindly: must exist, be a file, and be CV-sized.
+            p = Path(body.cv_path)
+            if not p.is_file() or p.stat().st_size > 2_000_000:
+                return JSONResponse({"ok": False, "error": "cv_path must be an existing file ≤2 MB"},
+                                    status_code=422)
+        try:
+            result = registration.register_user(
+                cfg, chat_id=body.chat_id, name=body.name, city=body.city,
+                cv_text=body.cv_text, cv_path=body.cv_path, queries=body.queries)
+        except registration.RegistrationError as e:
+            return JSONResponse({"ok": False, "error": str(e), "suggestions": e.suggestions},
+                                status_code=e.status)
+        return {"ok": True, **result}
+
     @app.get("/", response_class=HTMLResponse)
     def index(request: Request) -> str:
         lang = _lang(request)
-        con = _con(cfg)
+        user, ucfg = _ucfg(request)
+        con = _con(ucfg)
         try:
             today = date.today().isoformat()
-            entries = slate.build_slate(cfg, con, today)
+            entries = slate.build_slate(ucfg, con, today)
             alerts = slate.degraded_sources(con)   # surface dead/degraded scrapers (UC 1a)
-            if _FETCH_STATE.get("fetch_skipped"):   # data wasn't refreshed this start → offer a refetch
-                _age = _FETCH_STATE.get("data_age_hours") or 0
+            st = _fetch_state(user)
+            if st.get("fetch_skipped"):   # data wasn't refreshed this start → offer a refetch
+                _age = st.get("data_age_hours") or 0
                 alerts = [f"⚠ Данные от {_age:.0f} ч назад — при запуске не обновлялись. Нажми кнопку "
                           f"обновления ниже, чтобы поискать свежие вакансии (займёт ~15–20 мин)."] + (alerts or [])
             dr = con.execute("SELECT count FROM funnel_log WHERE stage='dedup_fuzzy' "
                              "ORDER BY id DESC LIMIT 1").fetchone()
             dedup_count = int(dr["count"]) if dr else 0
-            return slate.render_html(entries, today, alerts=alerts, dedup_count=dedup_count, lang=lang)
+            return slate.render_html(entries, today, alerts=alerts, dedup_count=dedup_count,
+                                     lang=lang, user=user)
         finally:
             con.close()
 
@@ -292,11 +460,12 @@ def create_app(cfg: dict, dry: bool = False):
         # Single annotation surface (the xlsx bootstrap pack is retired): the judged-but-unrated
         # queue, same card + same 💻🐀/😎/👸✨🧚 buttons, writing to the label table via /feedback.
         lang = _lang(request)
-        con = _con(cfg)
+        user, ucfg = _ucfg(request)
+        con = _con(ucfg)
         try:
             today = date.today().isoformat()
-            items, total = slate.annotation_batch(cfg, con, today)
-            return slate.render_annotate_html(items, today, total_pending=total, lang=lang)
+            items, total = slate.annotation_batch(ucfg, con, today)
+            return slate.render_annotate_html(items, today, total_pending=total, lang=lang, user=user)
         finally:
             con.close()
 
@@ -306,9 +475,10 @@ def create_app(cfg: dict, dry: bool = False):
         # /annotate. No manual code re-point; the synthetic GOLD stays a CLI-only dev floor.
         from . import validation
         lang = _lang(request)
-        con = _con(cfg)
+        user, ucfg = _ucfg(request)
+        con = _con(ucfg)
         try:
-            return slate.render_eval_html(validation.eval_report(cfg, con), lang=lang)
+            return slate.render_eval_html(validation.eval_report(ucfg, con), lang=lang, user=user)
         finally:
             con.close()
 
@@ -318,9 +488,10 @@ def create_app(cfg: dict, dry: bool = False):
         # or learn. Pure aggregation of stored llm_cov_reqs (no LLM call on the web path).
         from . import gaps
         lang = _lang(request)
-        con = _con(cfg)
+        user, ucfg = _ucfg(request)
+        con = _con(ucfg)
         try:
-            return slate.render_gaps_html(gaps.gap_report(cfg, con), lang=lang)
+            return slate.render_gaps_html(gaps.gap_report(ucfg, con), lang=lang, user=user)
         finally:
             con.close()
 
@@ -330,9 +501,11 @@ def create_app(cfg: dict, dry: bool = False):
         # status — the "which feedback did we act on" audit (W1). Pure read; toggles via /task-status.
         from . import tasks as _tasks
         lang = _lang(request)
-        con = _con(cfg)
+        user, ucfg = _ucfg(request)
+        con = _con(ucfg)
         try:
-            return slate.render_tasks_html(_tasks.all_tasks(con), _tasks.summary(con), lang=lang)
+            return slate.render_tasks_html(_tasks.all_tasks(con), _tasks.summary(con),
+                                           lang=lang, user=user)
         finally:
             con.close()
 
@@ -341,7 +514,10 @@ def create_app(cfg: dict, dry: bool = False):
         from . import tasks as _tasks
         if body.status not in _tasks.STATUSES:
             return JSONResponse({"ok": False, "error": "bad status"}, status_code=400)
-        con = _con(cfg)
+        ucfg, err = _ucfg_body(body.user)
+        if err:
+            return err
+        con = _con(ucfg)
         try:
             ok = _tasks.set_status(con, body.task_id, body.status)
             return JSONResponse({"ok": ok}, status_code=200 if ok else 404)
@@ -357,7 +533,10 @@ def create_app(cfg: dict, dry: bool = False):
             # label table. Validation above still runs (catches bot bugs); only the write is skipped.
             print(f"[dry] feedback vacancy_id={fb.vacancy_id} action={fb.action} note={fb.note!r}")
             return {"ok": True, "dry": True}
-        con = _con(cfg)
+        ucfg, err = _ucfg_body(fb.user)
+        if err:
+            return err
+        con = _con(ucfg)
         try:
             # Reject feedback for a non-existent vacancy — FKs are off, so without this an
             # unknown id silently corrupts the golden label table.
@@ -429,7 +608,10 @@ def create_app(cfg: dict, dry: bool = False):
         import json as _json
 
         from . import role_feedback as _rolefb, role_kind as _rk
-        con = _con(cfg)
+        ucfg, err = _ucfg_body(rf.user)
+        if err:
+            return err
+        con = _con(ucfg)
         try:
             row = con.execute("SELECT title, card_json FROM vacancy WHERE id = ?",
                               (rf.vacancy_id,)).fetchone()
@@ -453,19 +635,23 @@ def create_app(cfg: dict, dry: bool = False):
         """UI-triggered full pipeline (scrape→…→slate), async + SINGLE-FLIGHT. Returns immediately;
         poll /fetch-status. 409 if a fetch is already running (prevents double model-load)."""
         lang = _lang(request)
+        user, ucfg = _ucfg(request)
         if not _FETCH_LOCK.acquire(blocking=False):
             return JSONResponse({"ok": False, "error": t(lang, "fetch.busy409")}, status_code=409)
-        _FETCH_STATE.update(running=True, started=datetime.now(timezone.utc).isoformat(),
-                            finished=None, summary=None, error=None, fetch_skipped=False)
-        threading.Thread(target=_run_tick_background, args=(cfg,),
-                         kwargs={"german": german, "tertiary": tertiary}, daemon=True).start()
+        _fetch_state(user).update(running=True, started=datetime.now(timezone.utc).isoformat(),
+                                  finished=None, summary=None, error=None, fetch_skipped=False)
+        threading.Thread(target=_run_tick_background, args=(ucfg,),
+                         kwargs={"german": german, "tertiary": tertiary, "user": user},
+                         daemon=True).start()
         return {"ok": True, "message": t(lang, "fetch.started")}
 
     @app.get("/fetch-status")
     def fetch_status(request: Request):
         """Poll the background fetch: running flag + the latest funnel stage as progress (localized)."""
         lang = _lang(request)
-        con = _con(cfg)
+        user, ucfg = _ucfg(request)
+        st = _fetch_state(user)
+        con = _con(ucfg)
         try:
             latest = con.execute(
                 "SELECT stage, count FROM funnel_log ORDER BY id DESC LIMIT 1").fetchone()
@@ -480,17 +666,17 @@ def create_app(cfg: dict, dry: bool = False):
             heavy = bool(info.get("heavy"))
             idx = _STAGE_INDEX.get(code, -1)
         # localized error: a "@memory" sentinel from the worker → the friendly low-memory message
-        err = _FETCH_STATE["error"]
+        err = st["error"]
         if err == "@memory":
             err = t(lang, "fetch.err_memory")
         stages = [{"code": s["code"], "heavy": s["heavy"], "human": t(lang, f"fetch.stage.{s['code']}")}
                   for s in _FETCH_STAGES]
-        return {"running": _FETCH_STATE["running"], "started": _FETCH_STATE["started"],
-                "finished": _FETCH_STATE["finished"], "summary": _FETCH_STATE["summary"],
+        return {"running": st["running"], "started": st["started"],
+                "finished": st["finished"], "summary": st["summary"],
                 "error": err,
-                "slate_ready": _FETCH_STATE.get("slate_ready", False),
-                "fetch_skipped": _FETCH_STATE.get("fetch_skipped", False),
-                "data_age_hours": _FETCH_STATE.get("data_age_hours"),
+                "slate_ready": st.get("slate_ready", False),
+                "fetch_skipped": st.get("fetch_skipped", False),
+                "data_age_hours": st.get("data_age_hours"),
                 "stage": code,
                 "stage_count": (latest["count"] if latest else None),
                 "stage_human": stage_human, "heavy": heavy, "stage_index": idx,
@@ -498,9 +684,10 @@ def create_app(cfg: dict, dry: bool = False):
                 "stages": stages}
 
     @app.get("/funnel")
-    def funnel():
+    def funnel(request: Request):
         import json as _json
-        con = _con(cfg)
+        _, ucfg = _ucfg(request)
+        con = _con(ucfg)
         try:
             rows = con.execute(
                 "SELECT run_at, stage, source, count, detail FROM funnel_log "
@@ -535,26 +722,42 @@ def create_app(cfg: dict, dry: bool = False):
             con.close()
 
     @app.get("/slate.json")
-    def slate_json():
+    def slate_json(request: Request):
         # Same data the HTML index renders (index() above), as JSON — the Telegram bot's only read.
         import json as _json
-        con = _con(cfg)
+        _, ucfg = _ucfg(request)
+        con = _con(ucfg)
         try:
-            entries = slate.build_slate(cfg, con, date.today().isoformat())
+            entries = slate.build_slate(ucfg, con, date.today().isoformat())
             # ponytail: build_slate has never been JSON'd (HTML-only) → fit_score may be a numpy float.
             # Coerce non-native types (numpy → float) instead of 500-ing; typed view if it ever grows.
             return JSONResponse(content=_json.loads(_json.dumps(entries, default=float)))
         finally:
             con.close()
 
+    @app.get("/pool.json")
+    def pool_json(request: Request):
+        # ALL judged-but-unrated vacancies sorted by effective match (best first) — the bot's
+        # /all browse («смотреть все вакансии, начиная с самой топовой по мэтчу»).
+        import json as _json
+        _, ucfg = _ucfg(request)
+        con = _con(ucfg)
+        try:
+            cards = slate.full_pool(ucfg, con)
+            return JSONResponse(content=_json.loads(_json.dumps(
+                {"cards": cards, "total": len(cards)}, default=float)))
+        finally:
+            con.close()
+
     @app.get("/backlog.json")
-    def backlog_json():
+    def backlog_json(request: Request):
         # The judged-but-unrated BACKLOG (the /annotate pool) as JSON — the bot's "/more" beyond the
         # ≤10 daily slate. Reuses slate.annotation_batch (no freshness ceiling). Returns {cards, total}.
         import json as _json
-        con = _con(cfg)
+        _, ucfg = _ucfg(request)
+        con = _con(ucfg)
         try:
-            cards, total = slate.annotation_batch(cfg, con, date.today().isoformat())
+            cards, total = slate.annotation_batch(ucfg, con, date.today().isoformat())
             return JSONResponse(content=_json.loads(_json.dumps(
                 {"cards": cards, "total": total}, default=float)))
         finally:
@@ -585,20 +788,28 @@ def serve(cfg: dict, dry: bool = False, fetch_on_start: bool | None = None, quie
         print("⚠️  DRY MODE — POST /feedback + /role-feedback are logged, NOT written.")
     if fetch_on_start is None:
         fetch_on_start = bool((cfg.get("serve") or {}).get("fetch_on_start", True))
-    # Freshness guard: don't re-scrape on startup if a fetch completed within refetch_after_hours
-    # (default 12) — a quick restart reuses the recent slate. `--refetch` forces it.
+    # Multi-user: every user key + its cfg ("default" = the cfg passed in; others = overlays).
+    user_keys = users.list_users()
+    user_cfgs = {k: (cfg if k == "default" else users.load(k)) for k in user_keys}
+    # Freshness guard, PER USER: don't re-scrape a user's DB on startup if their fetch completed
+    # within refetch_after_hours (default 12) — a quick restart reuses the recent slate.
+    # `--refetch` forces all. Stale users queue for the sequential startup pipeline below.
+    stale_users: list[str] = []
     if fetch_on_start:
-        _c = db.connect(cfg["paths"]["db"])
-        try:
-            _skip, _msg = _refetch_guard(_c, cfg, force=refetch)
-            _age = _hours_since_last_fetch(_c) if _skip else None
-        finally:
-            _c.close()
-        if _skip:
-            print(_msg, flush=True)
-            fetch_on_start = False
-            # surface "data was NOT updated this start" so the UI + bot can offer a refetch
-            _FETCH_STATE.update(fetch_skipped=True, data_age_hours=_age)
+        for key in user_keys:
+            ucfg = user_cfgs[key]
+            _c = db.connect(ucfg["paths"]["db"])
+            try:
+                _skip, _msg = _refetch_guard(_c, ucfg, force=refetch)
+                _age = _hours_since_last_fetch(_c) if _skip else None
+            finally:
+                _c.close()
+            if _skip:
+                print(_msg if key == "default" else f"[{key}] {_msg}", flush=True)
+                # surface "data was NOT updated this start" so the UI + bot can offer a refetch
+                _fetch_state(key).update(fetch_skipped=True, data_age_hours=_age, slate_ready=True)
+            else:
+                stale_users.append(key)
     port = int(cfg.get("slate", {}).get("port", 8787))
     # Optionally bring up the Telegram bot (separate repo, installed editable) as a child process.
     # Soft: a missing token / disabled flag / uninstalled `schabasch_bot` just skips it — never crashes.
@@ -606,22 +817,44 @@ def serve(cfg: dict, dry: bool = False, fetch_on_start: bool | None = None, quie
     token = tg.get("token") or os.environ.get("TELEGRAM_BOT_TOKEN")
     # Per-mode chat lock: prod (no --dry) → the real user (golden labels); --dry → the debug chat
     # (you, while debugging — feedback is not persisted anyway). 0/empty falls back to auto-lock.
-    locked_chat = (tg.get("chat_id_debug") if dry else tg.get("chat_id")) or 0
+    # MULTI-USER (>1 user configured): no single-chat lock — the bot resolves identity per message
+    # via GET /users.json (chat_id → user key) and passes user=<key> on every call.
+    multi = len(user_keys) > 1
+    locked_chat = 0 if multi else ((tg.get("chat_id_debug") if dry else tg.get("chat_id")) or 0)
     child = None
     if tg.get("enabled") and token and importlib.util.find_spec("schabasch_bot"):
         env = {**os.environ, "TELEGRAM_BOT_TOKEN": token,
                "SCHABASCH_BASE_URL": f"http://127.0.0.1:{port}",
-               "TELEGRAM_CHAT_ID": str(locked_chat)}
+               "TELEGRAM_CHAT_ID": str(locked_chat),
+               "SCHABASCH_MULTI_USER": "1" if multi else "0"}
         child = subprocess.Popen([sys.executable, "-m", "schabasch_bot"], env=env)
-    if fetch_on_start:
+    if fetch_on_start and stale_users:
         # retrain + full fetch + progressive investigate, in a daemon thread so the server comes up
-        # immediately and the bot can poll /fetch-status (it greets when slate_ready flips).
+        # immediately and the bot can poll /fetch-status (fast_ready can expose the existing slate
+        # before the fresh fetch finishes). Users run SEQUENTIALLY — one model-heavy tick at a time
+        # on this memory-constrained Mac (_run_startup_pipeline single-flights via _FETCH_LOCK).
         seed = int((cfg.get("serve") or {}).get("investigate_seed", 2))
-        threading.Thread(target=_run_startup_pipeline, args=(cfg,),
-                         kwargs={"seed": seed, "dry": dry, "quiet": quiet}, daemon=True).start()
+        fast_ready = bool((cfg.get("serve") or {}).get("fast_ready", True))
+
+        def _startup_all() -> None:
+            for key in stale_users:
+                _run_startup_pipeline(user_cfgs[key], seed=seed, dry=dry, quiet=quiet,
+                                      fast_ready=fast_ready, user=key)
+
+        threading.Thread(target=_startup_all, daemon=True).start()
     else:
-        _FETCH_STATE["slate_ready"] = True   # no auto-fetch → bot greets with the existing slate
+        for key in user_keys:   # no auto-fetch → bot greets with each user's existing slate
+            _fetch_state(key)["slate_ready"] = True
     app = create_app(cfg, dry=dry)
+    # The bot polls /fetch-status every 3s — hundreds of access-log lines per tick drowned the
+    # real pipeline signal twice in live logs. Keep access logs, drop only the poll noise.
+    import logging as _logging
+
+    class _QuietPolls(_logging.Filter):
+        def filter(self, record):  # noqa: A003 — logging.Filter API
+            return "/fetch-status" not in record.getMessage()
+
+    _logging.getLogger("uvicorn.access").addFilter(_QuietPolls())
     try:
         uvicorn.run(app, host="127.0.0.1", port=port)
     finally:

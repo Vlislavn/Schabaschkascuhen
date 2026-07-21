@@ -26,3 +26,4 @@ __pycache__/
 
 # real profile stays local — ship config/profile.example.yaml instead
 /config/profile.yaml
+config/users/vladislav-nikulin.yaml

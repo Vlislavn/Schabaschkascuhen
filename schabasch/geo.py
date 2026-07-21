@@ -137,7 +137,9 @@ def geo_check(city: str | None, cfg: dict) -> tuple[bool, float | None]:
     coords = CITY_COORDS.get(name)
     if coords is None:
         return True, None  # не знаем — не режем, помечаем
-    anchors = cfg.get("geo", {}).get("anchors", {})
+    anchors = cfg.get("geo", {}).get("anchors") or {}
+    if not anchors:
+        return True, None  # anchors: null/{} = «вся Германия» — нет гео-предпочтения, всё «рядом»
     best: float | None = None
     in_radius = False
     for a in anchors.values():
@@ -168,7 +170,9 @@ def geo_mark(city: str | None, cfg: dict) -> dict:
     coords = CITY_COORDS.get(name)
     if coords is None:
         return {"far": False, "dist_km": None, "anchor": None}
-    anchors = cfg.get("geo", {}).get("anchors", {})
+    anchors = cfg.get("geo", {}).get("anchors") or {}
+    if not anchors:   # anchors: null/{} = nationwide — no geo preference, no 📍 far tag
+        return {"far": False, "dist_km": None, "anchor": None}
     best_name: str | None = None
     best_d: float | None = None
     in_radius = False

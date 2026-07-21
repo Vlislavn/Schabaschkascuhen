@@ -15,8 +15,9 @@ def test_multiplier_behaviour_preserving_when_learning_off(cfg, con):
 def test_multiplier_learns_from_wrong_role_votes(con):
     """P2: ≥ n_min golden '🙅 wrong role' votes pull the engineer multiplier below the 0.7 default
     toward the floor; a kind voted all-fits stays at its default. Below n_min → static default."""
-    cfg = {"slate": {"role_kind_learn": {"enabled": True, "n_min": 5, "alpha": 3.0, "mult_floor": 0.5}}}
-    assert rk.multiplier("hands_on_engineer", cfg, con) == 0.7          # no votes → default
+    cfg = {"slate": {"role_kind_mult": {"hands_on_engineer": 0.7},   # the user's own penalty
+                     "role_kind_learn": {"enabled": True, "n_min": 5, "alpha": 3.0, "mult_floor": 0.5}}}
+    assert rk.multiplier("hands_on_engineer", cfg, con) == 0.7          # no votes → configured default
 
     for i in range(5):                                                   # 5 wrong-role engineer votes
         v = seed_scored(con, f"e/{i}", score=4, company="C", title="Software Engineer")
@@ -47,10 +48,14 @@ def test_classify_engineer_vs_lead_vs_junior():
 
 
 def test_multiplier_soft_downrank_never_zero():
-    assert rk.multiplier("hands_on_engineer") < 1.0
-    assert rk.multiplier("junior") < rk.multiplier("hands_on_engineer")   # interns sink hardest
-    assert rk.multiplier("lead") == 1.0
-    assert rk.multiplier("") == 1.0
+    # de-personalization 2026-07-03: code defaults are NEUTRAL; the penalty is the user's config
+    assert rk.multiplier("hands_on_engineer") == 1.0
+    assert rk.multiplier("junior") == 1.0
+    taste = {"slate": {"role_kind_mult": {"hands_on_engineer": 0.45, "junior": 0.5}}}
+    assert 0 < rk.multiplier("hands_on_engineer", taste) < 1.0   # penalized, never zeroed
+    assert 0 < rk.multiplier("junior", taste) < 1.0
+    assert rk.multiplier("lead", taste) == 1.0
+    assert rk.multiplier("", taste) == 1.0
     # config override
     cfg = {"slate": {"role_kind_mult": {"hands_on_engineer": 0.9}}}
     assert rk.multiplier("hands_on_engineer", cfg) == 0.9

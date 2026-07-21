@@ -168,11 +168,63 @@ down-ranked jobs is high-rated — the VINFAST "ML Optimization Engineer" (4) th
 but an engineer"; it's softly demoted (×0.7), **still explore-eligible**, not hidden. A `lead`/`principal`
 engineering role is head-not-hands work the user likes → NOT penalized. Cards show a quiet `🛠 hands-on` / `🎓 intern` flag.
 
+### Re-tune on the "мусорные инженеры" complaint — 100 REAL labels (2026-06-22)
+
+A fresh run still surfaced too many engineer vacancies. Two root causes, both config-only:
+
+1. **Ingestion (primary).** `search.queries_en/de` were ~70% engineer titles (`machine learning
+   engineer`, `software engineer`, `systems engineer`, …) fed straight to the scrapers
+   (`pipeline.py:162`) → the fetched pool was engineer-dominated, and a slate down-rank only
+   RE-ORDERS the pool. Retargeted the queries to her employable roles (business/data/BI analyst,
+   project/program/process/product manager, IT consultant) + the strongest aspiration domains
+   (`aerospace project manager`, `defense program manager`, `public sector` / `Raumfahrt
+   Projektmanager`). **No bare engineer/Ingenieur/Entwickler title remains.**
+
+2. **Ranking (safety net).** `role_kind_mult.hands_on_engineer` tightened **0.7 → 0.45** (config
+   override; `_DEFAULT_MULT` unchanged). On the 100 real labels the engineer cohort is **30× rated-2
+   garbage + 3× rated-4 gems** (none 1/3/5). The mult is **rank-NEUTRAL** on the eval guardrail —
+   `effective` pairwise **0.804** / ndcg@10 **0.44** / spearman **0.541** are identical from 0.7 down
+   to 0.35 (so no regression). Its real effect is **exploit-slot composition**: at 0.45 **all 33**
+   labeled engineers fall below `quality_floor` and leave the exploit slots (vs **21/33** at 0.7),
+   while the 3 gems (VINFAST ML / Ground Segment / Human Factors) stay **explore-eligible** — the
+   user's «давить, но не прятать». `quality_floor` left at 0.45 (at mult 0.45 the floor is moot for
+   engineers — all already below it). The 2 non-engineer ≥4 jobs below the floor are pre-existing
+   low-FIT misses, unaffected by this change.
+
+### The 2 non-engineer rated-4 misses — null-vs-zero HyRE bug + floor re-tune (2026-06-22)
+
+The two ≥4 jobs flagged above (3321 "Project Manager Budget to Report", 3069 "Associate Director Data
+Science") scored fit ≈ 0.12 / 0.15. **Root cause: a null-masquerading-as-zero.** `extract_features` writes
+`fit_hyre = 0.0` (it's in `FEATURE_NAMES`) before `rerank_scored` runs, and `rerank_scored` only
+*overwrites* `fit_hyre` when HyRE actually generates. The 16 LABELED gold jobs never enter the
+SCORED/SLATED rerank pool (only the sparse backfill touched them) → they kept the `0.0` default. Since
+HyRE carries the heaviest weight (0.7), that phantom zero dragged the headline fit to ~0. A real HyRE
+score is `_cosine01 = (cos+1)/2 ∈ (0,1]` — **exactly 0.0 only on a degenerate/missing vector**.
+
+**Fix (generalizable, no model load):** `features.fit_from_feature` now treats `fit_hyre == 0.0` as
+ABSENT → the blend renormalizes over the present signals (sparse). Measured on the 100 real labels
+(`validation.eval_report`): **effective pairwise 0.804→0.814, spearman 0.540→0.558, ndcg@10 0.44 flat**
+(no regression). Rescues 3069 (fit 0.15→0.50, clears the floor on its own sparse signal).
+
+**❌ REJECTED — backfilling the missing HyRE.** Simulated (assign the median 0.797 to the 16 jobs):
+effective **regressed 0.804→0.787, ndcg 0.44→0.358**. Raw-bge-m3 HyRE is a near-constant (`n=83`: median
+0.797, std **0.019**, spearman-vs-gold **0.099**) → a backfill just adds a uniform +0.56 to all 16 jobs,
+inflating the 14 gold-2 jobs above better ones. HyRE is mostly an additive bias; the discriminative
+content of `fit_score` is the 0.3-weight sparse term. So "backfill the missing signal" is the *wrong* fix.
+
+**Floor re-tune `quality_floor` 0.45→0.37 (config).** 3321's honest sparse-only fit is 0.39 (a finance/
+PM role, lexically distant from a BA/Python CV) — below the 0.45 floor. The floor does **not** enter the
+eval `effective` metric (it only partitions exploit/explore), so lowering it cannot regress the
+guardrail. Engineers cap at effective **0.343** (×0.45 role-mult), so any floor in (0.343, 0.45] excludes
+all 33 equally — the role-mult, not the floor, keeps engineers out. 0.45 was over-tight: in the live pool
+only **3** jobs cleared it (exploit starved 3/8). At 0.37, **9** clear (0 engineers), seating both rated-4
+jobs with margin above the engineer cap. Below-floor jobs stay explore-eligible (recall-first).
+
 ## Model cascade for hard reasoning (2026-06-16)
 
 `schabasch/llm_clients.py` routes per role: Tier-0 ollama qwen3:8b (bulk, unchanged) → Tier-1 local
-Qwen3.6-35B MLX (`:8082`) → Tier-2 api.kather.ai `sota`. The Zotero-style card enrichment
+Qwen3.6-35B MLX (`:8082`) → Tier-2 remote OpenAI-compatible `sota`. The Zotero-style card enrichment
 (`schabasch/enrichment.py`) uses the cascade for pros/cons + deep company + a **clean re-parse of muddy
 "AI-slop" ads** (escalates to `sota` when `slop_score ≥ deep.slop_escalate_thr`). Extractive snippets via
-bge-reranker are deterministic (always available); abstractive degrades gracefully. Verified live: kather
+bge-reranker are deterministic (always available); abstractive degrades gracefully. Verified live: the remote
 `sota` re-parsed the MAM IT-Controlling JD into "a financial-controller role in IT, not a business analyst".

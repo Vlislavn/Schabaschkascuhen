@@ -94,6 +94,25 @@ def test_thin_day_no_padding(cfg, con):
     assert len(s) == 3
 
 
+def test_carry_forward_when_new_day_empty(cfg, con):
+    """Midnight robustness — a new day whose FRESH build is empty (the only scored jobs are already
+    rated, so they're excluded) must carry forward the most recent prior slate instead of greeting an
+    empty board. Reproduces the «после полуночи пусто» symptom: date.today() rolls over, today has no
+    slate_entry, and a cold fresh build would otherwise return []."""
+    from schabasch import db
+    ids = [seed_scored(con, f"cf/{i}", score=5, company=f"Co{i}") for i in range(10)]
+    day1 = slate.build_slate(cfg, con, "2026-06-13")
+    assert len(day1) > 0
+    for vid in ids:                                   # the whole pool gets rated → fresh build empties
+        db.insert_label(con, vid, {"score_1_5": 4, "applied": 0, "source": "slate"})
+    day2 = slate.build_slate(cfg, con, "2026-06-14")  # new day, no entry, fresh build == [] → carry-forward
+    assert len(day2) == len(day1)
+    assert {c["vacancy_id"] for c in day2} == {c["vacancy_id"] for c in day1}
+    # feedback keys to slate_date, so the carried rows must exist under the NEW date
+    n = con.execute("SELECT COUNT(*) FROM slate_entry WHERE slate_date = ?", ("2026-06-14",)).fetchone()[0]
+    assert n == len(day1)
+
+
 def test_slated_status_set(cfg, con):
     _seed_many(con, 12)
     s = slate.build_slate(cfg, con, "2026-06-13")
@@ -414,3 +433,21 @@ def test_recent_reject_penalty(cfg, con):
 
     cfg["slate"]["pref_penalty_days"] = 0                 # disabled → off
     assert slate.recent_reject_penalty(con, cfg) == {}
+
+
+def test_full_pool_sorted_by_effective_match(cfg, con):
+    """/all (bot): the pool is ranked by the production effective score, best first, no shuffle."""
+    import json as _json
+    from schabasch import features as _features
+    from tests.conftest import seed_scored
+    cfg = {**cfg, "judge": {**cfg.get("judge", {}), "rubric_version": "test-v1"}}
+    _features._ensure_schema(con)
+    ids = [seed_scored(con, f"u/pool{i}", score=3, company=f"C{i}") for i in range(3)]
+    for vid, fit in zip(ids, (0.2, 0.9, 0.5)):   # fit recomputed live from components (xenc here)
+        con.execute("INSERT OR REPLACE INTO vacancy_feature (vacancy_id, match_score, feature_json,"
+                    " computed_at) VALUES (?,?,?,datetime('now'))",
+                    (vid, fit, _json.dumps({"xenc_full": fit, "llm_cov": fit})))
+    con.commit()
+    pool = slate.full_pool(cfg, con)
+    assert [p["vacancy_id"] for p in pool] == [ids[1], ids[2], ids[0]]     # 0.9 > 0.5 > 0.2
+    assert pool[0]["effective"] >= pool[1]["effective"] >= pool[2]["effective"]

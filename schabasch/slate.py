@@ -77,7 +77,11 @@ def _fit_fields(con, vacancy_id: int, cfg: dict, cand_quals: dict | None = None)
             "llm_cov": feat.get("llm_cov"),
             "llm_cov_reqs": feat.get("llm_cov_reqs") or [],
             "elig_score": live["elig_score"], "elig_note": live["elig_note"],
-            "elig_severity": live["elig_severity"]}
+            "elig_severity": live["elig_severity"],
+            # role kinds THIS user doesn't penalize → no «не твоё» card flag (flag follows the
+            # penalty; user #1's verdict is not a fact about the job — multi-user fix)
+            "role_flag_off": [k for k in ("hands_on_engineer", "junior")
+                              if _rk.multiplier(k, cfg) >= 1.0]}
 
 
 def _load_scored(con, rubric_version: str | None = None, *, max_age_days: int | None = None,
@@ -441,6 +445,26 @@ def build_slate(cfg: dict, con, slate_date: str, *, rebuild: bool = False) -> li
     con.commit()
     db.log_funnel(con, "slate", len(slate), detail=f"exploit={len(exploit)} explore={len(explore)}")
 
+    # Carry-forward fallback (midnight robustness): a brand-new day before the nightly tick has run has
+    # no slate_entry for slate_date, so this is a FRESH build. If it yielded nothing — the scored pool
+    # aged out of the fresh window, or the tick hasn't run yet — reopen the most recent PRIOR slate so
+    # the user never greets an empty board right after midnight. Feedback keys to slate_date, so the
+    # rows are COPIED to today's date; the recursive call then hits the idempotent reopen branch above.
+    if not slate:
+        prev = con.execute(
+            "SELECT slate_date FROM slate_entry WHERE slate_date < ? ORDER BY slate_date DESC LIMIT 1",
+            (slate_date,),
+        ).fetchone()
+        if prev:
+            con.execute(
+                "INSERT OR IGNORE INTO slate_entry (slate_date, vacancy_id, rank, slot_type) "
+                "SELECT ?, vacancy_id, rank, slot_type FROM slate_entry WHERE slate_date = ?",
+                (slate_date, prev["slate_date"]),
+            )
+            con.commit()
+            db.log_funnel(con, "slate_carryforward", 0, detail=f"from={prev['slate_date']}")
+            return build_slate(cfg, con, slate_date)
+
     # вернуть без внутренних полей сортировки
     keys = ("vacancy_id", "rank", "slot_type", "title", "company", "city", "url",
             "score", "why", "explanation", "summary", "work_mode", "date_posted", "first_seen",
@@ -561,7 +585,7 @@ async function fb(id, action, el){
   const note = noteEl && noteEl.value.trim() ? noteEl.value.trim() : null;
   try{
     const r = await fetch('/feedback', {method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({vacancy_id:id, action:action, note:note})});
+      body: JSON.stringify({vacancy_id:id, action:action, note:note, user:USER})});
     if(r.ok){ card.classList.add('done');
       card.querySelector('.fbstate').textContent = ' ✓ '+action; bump(); }
   }catch(e){ alert('feedback failed: '+e); }
@@ -624,12 +648,12 @@ function triggerFetch(){
   var btn = document.getElementById('fetch-btn'), st = document.getElementById('fetch-status');
   if(btn) btn.disabled = true;
   if(st) st.textContent = T.fetch_starting;
-  fetch('/fetch?lang='+LANG, {method:'POST'}).then(function(r){ return r.json().then(function(d){return {ok:r.ok, d:d};}); })
+  fetch('/fetch?lang='+LANG+'&user='+USER, {method:'POST'}).then(function(r){ return r.json().then(function(d){return {ok:r.ok, d:d};}); })
    .then(function(x){
      if(!x.ok){ if(st) st.textContent = ' ⚠ ' + (x.d.error || T.fetch_busy); if(btn) btn.disabled = false; return; }
      if(st) st.textContent = T.fetch_running;
      var poll = setInterval(function(){
-       fetch('/fetch-status?lang='+LANG).then(function(r){return r.json();}).then(function(s){
+       fetch('/fetch-status?lang='+LANG+'&user='+USER).then(function(r){return r.json();}).then(function(s){
          if(s.running){
            var label = s.stage_human || s.stage || T.fetch_working;
            var pos = (s.stage_index >= 0) ? (' (' + (s.stage_index+1) + '/' + s.n_stages + ')') : '';
@@ -645,7 +669,7 @@ function triggerFetch(){
 // /tasks: flip a comment-task's status (open|accounted|wontfix) → POST /task-status, update inline.
 function taskStatus(id, status){
   fetch('/task-status', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({task_id:id, status:status})})
+    body: JSON.stringify({task_id:id, status:status, user:USER})})
    .then(function(r){return r.json();}).then(function(d){
      if(!d.ok) return;
      var row = document.getElementById('task-'+id); if(!row) return;
@@ -665,13 +689,14 @@ _initFilter();
 """
 
 
-def _js(lang: str) -> str:
-    """Client script with a localized strings object `T` + `LANG` injected at the top (the static
-    body references T.key / LANG, so client-side text follows the page language)."""
+def _js(lang: str, user: str = "default") -> str:
+    """Client script with a localized strings object `T` + `LANG` + `USER` injected at the top (the
+    static body references T.key / LANG / USER, so client-side text + writes follow the page)."""
     keys = ["js.marked", "js.done", "js.fetch_starting", "js.fetch_busy", "js.fetch_running",
             "js.fetch_working", "js.fetch_done", "js.task_accounted", "js.task_wontfix", "js.task_open"]
     tbl = {k.split(".", 1)[1]: t(lang, k) for k in keys}
     head = (f"const LANG={json.dumps(lang)};\n"
+            f"const USER={json.dumps(user)};\n"
             f"const T={json.dumps(tbl, ensure_ascii=False)};\n")
     return head + _JS_BODY
 
@@ -904,6 +929,8 @@ def _card_block(e: dict, *, show_applied: bool = True, lang: str = DEFAULT_LANG)
     # role-kind flag (W1): «🛠 hands-on» / «🎓 intern» — quiet gray, never competes with the score/⛔
     # (Von Restorff). Computed from the title so it shows on both build + reopen paths.
     kind = _rk.classify(e.get("title"), e.get("summary"))
+    if kind in (e.get("role_flag_off") or ()):   # this user doesn't penalize the kind → no flag
+        kind = ""
     role_flag = t(lang, f"roleflag.{kind}") if kind in ("hands_on_engineer", "junior") else ""
     role_flag_html = f' · <span class="far">{escape(role_flag)}</span>' if role_flag else ""
     verified_html = _verified_html(e.get("investigation"), lang)   # deeper company review
@@ -1025,30 +1052,50 @@ def _legend_html(lang: str = DEFAULT_LANG) -> str:
             + "".join(f"<span>{escape(t(lang, k))}</span>" for k in _LEGEND_KEYS) + "</div></details>")
 
 
-def _lang_toggle(lang: str) -> str:
+def _usr_qs(user: str) -> str:
+    """`&user=<key>` link fragment — empty for the default user, so single-user pages (and their
+    tests) stay byte-identical. Keys are validated alnum/-/_ in users.load — no escaping needed."""
+    return f"&user={user}" if user and user != "default" else ""
+
+
+def _lang_toggle(lang: str, user: str = "default") -> str:
     """Header language switcher: links to ?lang=<other> for every available locale (a new locale JSON
-    appears here for free). The active language is shown bold-disabled."""
+    appears here for free). The active language is shown bold-disabled. Preserves the user."""
     links = []
     for code in available_langs():
         name = escape(t(code, "lang.name"))
         if code == lang:
             links.append(f'<b>{name}</b>')
         else:
-            links.append(f'<a href="?lang={code}">{name}</a>')
+            links.append(f'<a href="?lang={code}{_usr_qs(user)}">{name}</a>')
     return f'<span class="langsw">{" · ".join(links)}</span>'
 
 
-def _page(h1: str, top_html: str, body: str, lang: str = DEFAULT_LANG) -> str:
-    """Self-contained HTML shell shared by every page. `lang` sets the <html> lang + the toggle."""
+def _user_toggle(user: str, lang: str) -> str:
+    """Header user switcher (multi-user): ?user=<key> links, active user bold — the _lang_toggle
+    pattern. Renders NOTHING when only the default user exists (single-user UI unchanged)."""
+    from . import users as _users
+    keys = _users.list_users()
+    if len(keys) <= 1:
+        return ""
+    links = [f'<b>{escape(k)}</b>' if k == user else
+             f'<a href="?user={k}&lang={lang}">{escape(k)}</a>' for k in keys]
+    return f'<span class="langsw">👤 {" · ".join(links)}</span> · '
+
+
+def _page(h1: str, top_html: str, body: str, lang: str = DEFAULT_LANG,
+          user: str = "default") -> str:
+    """Self-contained HTML shell shared by every page. `lang` sets the <html> lang + the toggle;
+    `user` scopes every link + JS write to that user's DB (multi-user)."""
     return f"""<!doctype html><html lang="{lang}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{escape(h1)}</title><style>{_CSS}</style></head>
 <body>
-<div class="topbar">{_lang_toggle(lang)}</div>
+<div class="topbar">{_user_toggle(user, lang)}{_lang_toggle(lang, user)}</div>
 <h1>{escape(h1)}</h1>
 {top_html}
 {body}
-<script>{_js(lang)}</script>
+<script>{_js(lang, user)}</script>
 </body></html>"""
 
 
@@ -1061,7 +1108,8 @@ def _fetch_btn(lang: str = DEFAULT_LANG) -> str:
 
 
 def render_html(slate: list[dict], slate_date: str, alerts: list[str] | None = None,
-                dedup_count: int | None = None, lang: str = DEFAULT_LANG) -> str:
+                dedup_count: int | None = None, lang: str = DEFAULT_LANG,
+                user: str = "default") -> str:
     """Daily slate. Buttons → POST /feedback. alerts → a degradation banner. dedup_count → a visible
     'dedup happened' marker (logged-not-merged is otherwise invisible). The 🔄 button starts a fetch.
 
@@ -1080,15 +1128,32 @@ def render_html(slate: list[dict], slate_date: str, alerts: list[str] | None = N
                 f'{t(lang, pkey, done=done, total=total)}</p>' if total else "")
     dedup = (f'<p class="muted">{t(lang, "slate.dedup", n=dedup_count, lang=lang)}</p>'
              if dedup_count else "")
-    nav = (f'<p class="nav muted"><a href="/annotate?lang={lang}">{t(lang, "nav.annotate_more")}</a>'
-           f'<a href="/eval?lang={lang}">{t(lang, "nav.eval")}</a>'
-           f'<a href="/gaps?lang={lang}">{t(lang, "nav.gaps")}</a>'
-           f'<a href="/tasks?lang={lang}">{t(lang, "nav.tasks")}</a>'
-           f'<a href="/funnel?lang={lang}">{t(lang, "nav.funnel")}</a> {_fetch_btn(lang)}</p>')
+    uq = _usr_qs(user)
+    nav = (f'<p class="nav muted"><a href="/annotate?lang={lang}{uq}">{t(lang, "nav.annotate_more")}</a>'
+           f'<a href="/eval?lang={lang}{uq}">{t(lang, "nav.eval")}</a>'
+           f'<a href="/gaps?lang={lang}{uq}">{t(lang, "nav.gaps")}</a>'
+           f'<a href="/tasks?lang={lang}{uq}">{t(lang, "nav.tasks")}</a>'
+           f'<a href="/funnel?lang={lang}{uq}">{t(lang, "nav.funnel")}</a> {_fetch_btn(lang)}</p>')
     chips = _chip_row(lang) if slate else ""
     legend = _legend_html(lang) if slate else ""
     return _page(t(lang, "slate.title", date=slate_date),
-                 banner + nav + progress + dedup + legend + chips, body, lang)
+                 banner + nav + progress + dedup + legend + chips, body, lang, user)
+
+
+def full_pool(cfg: dict, con) -> list[dict]:
+    """ALL judged-but-unrated vacancies, BEST MATCH FIRST — the bot's /all browse. Same data
+    source as annotation_batch (one model, two projections): that one shuffles for annotation
+    diversity, this one ranks by the production effective score, no cap, no shuffle."""
+    rubric_version = cfg.get("judge", {}).get("rubric_version")
+    items = _load_scored(con, rubric_version=rubric_version)
+    cand_quals = _cand_quals(con)
+    for it in items:
+        it.update(_fit_fields(con, it["vacancy_id"], cfg, cand_quals))
+        mark = _geo.geo_mark(it.get("city"), cfg)
+        it["far"], it["dist_km"], it["geo_anchor"] = mark["far"], mark["dist_km"], mark["anchor"]
+        it["effective"] = round(effective_score(it, cfg, con), 4)
+    items.sort(key=lambda x: x["effective"], reverse=True)
+    return items
 
 
 def annotation_batch(cfg: dict, con, slate_date: str) -> tuple[list[dict], int]:
@@ -1112,7 +1177,7 @@ def annotation_batch(cfg: dict, con, slate_date: str) -> tuple[list[dict], int]:
 
 
 def render_annotate_html(items: list[dict], slate_date: str, *, total_pending: int,
-                         lang: str = DEFAULT_LANG) -> str:
+                         lang: str = DEFAULT_LANG, user: str = "default") -> str:
     """The single annotation surface (the xlsx pack is retired). Same card + same 💻🐀/😎/👸✨🧚
     buttons (no 'applied' — there's nothing to "apply to" for a random queued job)."""
     body = ('<div id="cards">' + "\n".join(_card_block(e, show_applied=False, lang=lang)
@@ -1122,29 +1187,31 @@ def render_annotate_html(items: list[dict], slate_date: str, *, total_pending: i
     shown = t(lang, "annotate.shown", shown=total, total=total_pending) if total_pending > total else ""
     progress = (f'<p class="progress" id="progress" data-total="{total}">'
                 f'{t(lang, "progress.marked", done=0, total=total)}</p>' if total else "")
-    nav = (f'<p class="nav muted"><a href="/?lang={lang}">{t(lang, "nav.slate_today")}</a>'
-           f'<a href="/eval?lang={lang}">{t(lang, "nav.eval")}</a>'
-           f'<a href="/gaps?lang={lang}">{t(lang, "nav.gaps")}</a>'
-           f'<a href="/tasks?lang={lang}">{t(lang, "nav.tasks")}</a>'
-           f'<a href="/funnel?lang={lang}">{t(lang, "nav.funnel")}</a> {_fetch_btn(lang)}</p>')
+    uq = _usr_qs(user)
+    nav = (f'<p class="nav muted"><a href="/?lang={lang}{uq}">{t(lang, "nav.slate_today")}</a>'
+           f'<a href="/eval?lang={lang}{uq}">{t(lang, "nav.eval")}</a>'
+           f'<a href="/gaps?lang={lang}{uq}">{t(lang, "nav.gaps")}</a>'
+           f'<a href="/tasks?lang={lang}{uq}">{t(lang, "nav.tasks")}</a>'
+           f'<a href="/funnel?lang={lang}{uq}">{t(lang, "nav.funnel")}</a> {_fetch_btn(lang)}</p>')
     # Tesler/Jakob (laws-of-ux gate): the slate's time/order/far filter chips are dropped here — they
     # are meaningless on an unlabeled shuffle queue. Keep the shared emoji legend.
     legend = _legend_html(lang) if items else ""
     return _page(t(lang, "annotate.title", n=total_pending, shown=shown), nav + progress + legend,
-                 body, lang)
+                 body, lang, user)
 
 
-def render_eval_html(report: dict, lang: str = DEFAULT_LANG) -> str:
+def render_eval_html(report: dict, lang: str = DEFAULT_LANG, user: str = "default") -> str:
     """Validation dashboard: matcher ranking-quality vs the user's REAL labels (schabasch.validation).
     Von Restorff: one headline (the clean fit_score). Goal-Gradient: a "rate more in /annotate"
     banner until enough labels accrue. No inputs — the page only reads (Tesler)."""
-    nav = (f'<p class="nav muted"><a href="/?lang={lang}">{t(lang, "nav.slate")}</a>'
-           f'<a href="/annotate?lang={lang}">{t(lang, "nav.annotate")}</a>'
-           f'<a href="/gaps?lang={lang}">{t(lang, "nav.gaps")}</a>'
-           f'<a href="/funnel?lang={lang}">{t(lang, "nav.funnel")}</a></p>')
+    uq = _usr_qs(user)
+    nav = (f'<p class="nav muted"><a href="/?lang={lang}{uq}">{t(lang, "nav.slate")}</a>'
+           f'<a href="/annotate?lang={lang}{uq}">{t(lang, "nav.annotate")}</a>'
+           f'<a href="/gaps?lang={lang}{uq}">{t(lang, "nav.gaps")}</a>'
+           f'<a href="/funnel?lang={lang}{uq}">{t(lang, "nav.funnel")}</a></p>')
     if report["n_labels"] == 0:
         body = f'<p class="muted">{t(lang, "eval.empty", lang=lang)}</p>'
-        return _page(t(lang, "eval.title"), nav, body, lang)
+        return _page(t(lang, "eval.title"), nav, body, lang, user)
 
     h = report["headline"]
     pw = f'{h["pairwise_acc"]:.0%}'
@@ -1170,7 +1237,7 @@ def render_eval_html(report: dict, lang: str = DEFAULT_LANG) -> str:
     table = (f'<table class="metrics"><thead><tr><th>{c_sig}</th><th>{c_pw}</th><th>{c_nd}</th>'
              f'<th>{c_sp}</th><th>{c_n}</th></tr></thead><tbody>' + "".join(trs) + "</tbody></table>")
     note = f'<p class="muted">{t(lang, "eval.note")}</p>'
-    return _page(t(lang, "eval.title"), nav, headline + banner + table + note, lang)
+    return _page(t(lang, "eval.title"), nav, headline + banner + table + note, lang, user)
 
 
 def _theme_label(lang: str, theme: str) -> str:
@@ -1179,18 +1246,20 @@ def _theme_label(lang: str, theme: str) -> str:
     return theme if lbl == f"theme.{theme}" else lbl
 
 
-def render_tasks_html(tasks: list[dict], summary: dict, lang: str = DEFAULT_LANG) -> str:
+def render_tasks_html(tasks: list[dict], summary: dict, lang: str = DEFAULT_LANG,
+                      user: str = "default") -> str:
     """Comment-tracker page: every review comment as a theme-grouped task with an open|accounted|
     wontfix toggle — the "which feedback did the product act on, which not" audit (W1). Reuses the
     shared shell + JS (taskStatus). Read-and-toggle only (Tesler)."""
-    nav = (f'<p class="nav muted"><a href="/?lang={lang}">{t(lang, "nav.slate")}</a>'
-           f'<a href="/annotate?lang={lang}">{t(lang, "nav.annotate")}</a>'
-           f'<a href="/eval?lang={lang}">{t(lang, "nav.eval")}</a>'
-           f'<a href="/gaps?lang={lang}">{t(lang, "nav.gaps")}</a>'
-           f'<a href="/funnel?lang={lang}">{t(lang, "nav.funnel")}</a></p>')
+    uq = _usr_qs(user)
+    nav = (f'<p class="nav muted"><a href="/?lang={lang}{uq}">{t(lang, "nav.slate")}</a>'
+           f'<a href="/annotate?lang={lang}{uq}">{t(lang, "nav.annotate")}</a>'
+           f'<a href="/eval?lang={lang}{uq}">{t(lang, "nav.eval")}</a>'
+           f'<a href="/gaps?lang={lang}{uq}">{t(lang, "nav.gaps")}</a>'
+           f'<a href="/funnel?lang={lang}{uq}">{t(lang, "nav.funnel")}</a></p>')
     if not tasks:
         body = f'<p class="muted">{t(lang, "tasks.empty", lang=lang)}</p>'
-        return _page(t(lang, "tasks.title"), nav, body, lang)
+        return _page(t(lang, "tasks.title"), nav, body, lang, user)
 
     badge_of = {"accounted": t(lang, "tasks.status.accounted"),
                 "wontfix": t(lang, "tasks.status.wontfix"), "open": t(lang, "tasks.status.open")}
@@ -1231,21 +1300,22 @@ def render_tasks_html(tasks: list[dict], summary: dict, lang: str = DEFAULT_LANG
            total=summary.get("total", 0))
     headline = f'<p class="headline">{hl}</p>'
     note = f'<p class="muted">{t(lang, "tasks.note")}</p>'
-    return _page(t(lang, "tasks.title"), nav, headline + "".join(sections) + note, lang)
+    return _page(t(lang, "tasks.title"), nav, headline + "".join(sections) + note, lang, user)
 
 
-def render_gaps_html(report: dict, lang: str = DEFAULT_LANG) -> str:
+def render_gaps_html(report: dict, lang: str = DEFAULT_LANG, user: str = "default") -> str:
     """Skill-gap dashboard (schabasch.gaps): across the jobs the user WANTS (😎/👸✨🧚/applied), which
     requirements recur as ✗ missing / ◐ partial. A 'not on my CV → add it or learn it' list."""
-    nav = (f'<p class="nav muted"><a href="/?lang={lang}">{t(lang, "nav.slate")}</a>'
-           f'<a href="/annotate?lang={lang}">{t(lang, "nav.annotate")}</a>'
-           f'<a href="/eval?lang={lang}">{t(lang, "nav.eval")}</a>'
-           f'<a href="/funnel?lang={lang}">{t(lang, "nav.funnel")}</a></p>')
+    uq = _usr_qs(user)
+    nav = (f'<p class="nav muted"><a href="/?lang={lang}{uq}">{t(lang, "nav.slate")}</a>'
+           f'<a href="/annotate?lang={lang}{uq}">{t(lang, "nav.annotate")}</a>'
+           f'<a href="/eval?lang={lang}{uq}">{t(lang, "nav.eval")}</a>'
+           f'<a href="/funnel?lang={lang}{uq}">{t(lang, "nav.funnel")}</a></p>')
     n_wanted = report.get("n_wanted", 0)
     rows = report.get("rows") or []
     if n_wanted == 0 or not rows:
         body = f'<p class="muted">{t(lang, "gaps.empty", lang=lang)}</p>'
-        return _page(t(lang, "gaps.title"), nav, body, lang)
+        return _page(t(lang, "gaps.title"), nav, body, lang, user)
     headline = (f'<p class="headline">'
                 f'{t(lang, "gaps.headline", n=n_wanted, parsed=report.get("n_jobs_with_reqs", 0))}</p>')
     banner = ""
@@ -1264,4 +1334,4 @@ def render_gaps_html(report: dict, lang: str = DEFAULT_LANG) -> str:
              f'<th>{t(lang, "gaps.col.present")}</th><th>{t(lang, "gaps.col.jobs")}</th></tr></thead>'
              f'<tbody>' + "".join(trs) + "</tbody></table>")
     note = f'<p class="muted">{t(lang, "gaps.note")}</p>'
-    return _page(t(lang, "gaps.title"), nav, headline + banner + table + note, lang)
+    return _page(t(lang, "gaps.title"), nav, headline + banner + table + note, lang, user)

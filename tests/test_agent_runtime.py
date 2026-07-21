@@ -1,6 +1,6 @@
 """Regression tests for the ReAct agent harness fix (2026-06-16).
 
-Covers two root causes proven via CAPA on the kather `sota` / qwen3:8b agent runs:
+Covers two root causes proven via CAPA on the remote `sota` / qwen3:8b agent runs:
 
   1. parse_json_output only recognized the '[max turns exhausted]' sentinel, so kl's OTHER
      non-finalize sentinels ('[budget exceeded]') and the salvage preamble reached ast.literal_eval

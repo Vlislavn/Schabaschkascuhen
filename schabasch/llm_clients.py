@@ -4,7 +4,7 @@
 is ADDITIVE: it reuses `OllamaClient` / `LLMError` / `with_retry` as-is and adds
 
   * ``OpenAIClient`` — a requests-based client for ANY OpenAI-compatible ``/chat/completions``
-    endpoint (mlx_lm.server for the local Qwen3.6-35B-OptiQ-4bit, api.kather.ai `sota`), mirroring
+    endpoint (mlx_lm.server for the local Qwen3.6-35B-OptiQ-4bit, or any remote provider), mirroring
     ``OllamaClient.chat_json(system, user) -> dict`` / ``model_digest() -> str | None`` so callers
     are client-agnostic.
   * ``make_llm_client(cfg, role)`` — a config-driven router (``cfg["llm"]["roles"][role]``) that
@@ -56,9 +56,10 @@ def _extract_json_obj(text: str) -> dict | None:
     s = re.sub(r"\s*```\s*$", "", s).strip()
     try:
         obj = json.loads(s)
-        return obj if isinstance(obj, dict) else None
     except json.JSONDecodeError:
-        pass
+        obj = None  # not whole-string JSON → fall through to the embedded-object salvage below
+    else:
+        return obj if isinstance(obj, dict) else None
     m = _JSON_OBJ_RE.search(s)
     if not m:
         return None
@@ -71,7 +72,7 @@ def _extract_json_obj(text: str) -> dict | None:
 
 @dataclass
 class OpenAIClient:
-    """OpenAI-compatible chat client (mlx_lm.server / api.kather.ai). Interface-compatible with
+    """OpenAI-compatible chat client (mlx_lm.server / any remote provider). Interface-compatible with
     ``OllamaClient``: ``chat_json(system, user) -> dict`` raising classified ``LLMError``."""
 
     model: str
@@ -138,8 +139,8 @@ class OpenAIClient:
 def _read_env_file_key(path: str, var: str) -> str | None:
     """Read ONE key from a .env file, stripping an inline ` # comment` from an unquoted value.
 
-    Deliberately minimal (no full dotenv parsing): the user points at prototype-internal-KL/.env
-    so the kather key resolves without exporting it. Quoted values keep their content verbatim.
+    Deliberately minimal (no full dotenv parsing): the user points at an existing .env file
+    so the API key resolves without exporting it. Quoted values keep their content verbatim.
     """
     try:
         for line in Path(path).read_text(encoding="utf-8").splitlines():
@@ -246,7 +247,7 @@ def agent_client_params(cfg: dict) -> dict:
     strongest LOCAL agent (measured sota-grade), but supervised/opt-in (never auto-served). When that
     localhost server is **not reachable** (the common unattended case), fall back to the ollama small
     model (``judge_model``) so a tick still investigates AND never co-loads the 22GB 35B with the bulk
-    ollama pool / hangs on a dead :8082. A REMOTE agent role (e.g. api.kather.ai) is used as-is — no
+    ollama pool / hangs on a dead :8082. A REMOTE agent role (any non-localhost URL) is used as-is — no
     ping (it's not a co-load/headroom concern and a probe would just add latency).
     """
     llm = cfg.get("llm") or {}

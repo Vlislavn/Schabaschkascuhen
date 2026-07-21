@@ -57,8 +57,10 @@ def _row_to_vacancy(source: str, r: dict, query_term: str, query_city: str) -> d
 
 
 def _scrape_one(source: str, term: str, city: str, *, results_wanted: int,
-                hours_old: int | None) -> tuple[int, bool]:
-    """Один (source, term, city). Возвращает (вставлено_строк, было_исключение)."""
+                hours_old: int | None, remote: bool = False) -> tuple[int, bool]:
+    """Один (source, term, city). remote=True — worldwide-remote проход (search.remote_worldwide):
+    board-side фильтр «только удалёнка», локация игнорируется работодателем по определению.
+    Возвращает (вставлено_строк, было_исключение)."""
     kw: dict[str, Any] = dict(
         site_name=[source],
         search_term=term,
@@ -69,6 +71,8 @@ def _scrape_one(source: str, term: str, city: str, *, results_wanted: int,
         hours_old=hours_old,
         verbose=0,
     )
+    if remote:
+        kw["is_remote"] = True
     if source == "linkedin":
         kw["linkedin_fetch_description"] = True
     try:
@@ -87,7 +91,7 @@ def scrape(cfg: dict, con, *, queries: list[str] | None = None,
     queries = queries if queries is not None else search.get("queries_en", [])
     cities = search.get("cities", [])
     sources = sources if sources is not None else [
-        s for s in search.get("sources", []) if s in ("indeed", "linkedin")
+        s for s in search.get("sources", []) if s in ("indeed", "linkedin", "glassdoor")
     ]
     if hours_old is None:
         hours_old = search.get("hours_old")
@@ -110,10 +114,15 @@ def scrape(cfg: dict, con, *, queries: list[str] | None = None,
         consec_fail = 0
         count = 0
         stale_skipped = 0
-        pairs = [(t, c) for t in queries for c in cities]
-        for i, (term, city) in enumerate(pairs):
+        pairs = [(t, c, False) for t in queries for c in cities]
+        # search.remote_worldwide (per-user): extra fully-remote worldwide pass per query.
+        # LinkedIn only — location="Worldwide" is a real LinkedIn geo; indeed is per-country
+        # (country_indeed) and has no worldwide scope.
+        if search.get("remote_worldwide") and source == "linkedin":
+            pairs += [(t, "Worldwide", True) for t in queries]
+        for i, (term, city, remote) in enumerate(pairs):
             res, exc = _scrape_one(source, term, city, results_wanted=results_wanted,
-                                   hours_old=src_hours)
+                                   hours_old=src_hours, remote=remote)
             rows = 0
             if not exc and not isinstance(res, int):
                 df = res

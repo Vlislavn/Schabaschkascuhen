@@ -362,16 +362,24 @@ def _investigate_row(con, row, *, cfg: dict | None, agent_fn, company_cache: dic
             upsert_company_facts(con, key, company, ground, now)
     ident = str(ground.get("company_description") or "").strip()
 
-    parts = [f"Investigate this job posting:",
-             f"Title: {title}\nCompany: {company}\nURL: {url}\n",
-             f"Description preview:\n{desc_snippet}\n"]
+    # Free-text CONTENT (the job-description preview, resolved employer facts) rides in `context`, NOT
+    # in `task`. kl's facet-coverage gate (runtime/loop/react.py::_check_facet_coverage) scans ONLY
+    # `task`, and an incidental word there — 'current'/'today'/'now' or a bare year — is mis-extracted
+    # as a required research facet ('Fetch current data'/'Fetch data for 2024') that no observation
+    # covers, so it SILENTLY BLOCKS an already-valid final_answer and the run grinds to
+    # max_turns_exhausted. MEASURED 2026-06-21: all 5 of the day's failing slate cards carried
+    # 'today'/'currently' in the description preview; the 35B emitted a correct final_answer on turn 5
+    # that the gate discarded. Keep `task` to terse INSTRUCTIONS; put prose in `context`.
+    context: dict = {"job_description_preview": desc_snippet}
+    parts = ["Investigate this job posting (the description preview is in the Context below):",
+             f"Title: {title}\nCompany: {company}\nURL: {url}\n"]
     if ident or ground.get("official_site"):   # we have an authoritative identity → don't re-research it
-        extra = ((f" | official site: {ground['official_site']}" if ground.get("official_site") else "")
-                 + (f" | country: {ground['country']}" if ground.get("country") else ""))
+        context["verified_employer"] = {"name": company, **{k: ground[k] for k in
+            ("company_description", "official_site", "country") if ground.get(k)}}
         parts.append(
-            "VERIFIED EMPLOYER (authoritative, already resolved — do NOT re-research the company; "
-            "CONFIRM this posting matches it, then focus on the posting's must-have requirements and "
-            f"English/remote signals):\n  {company} — {ident}{extra}")
+            "VERIFIED EMPLOYER (authoritative, already resolved — see Context.verified_employer; do "
+            "NOT re-research the company; CONFIRM this posting matches it, then focus on the posting's "
+            "must-have requirements and English/remote signals).")
     if news_due:      # fold the fresh-signal ask into THIS single agent call (no second run)
         parts.append(
             'ALSO add to your JSON: "recent_news" (1-2 sentences on recent funding/layoffs/branch '
@@ -387,7 +395,7 @@ def _investigate_row(con, row, *, cfg: dict | None, agent_fn, company_cache: dic
     last_err = "no output"
     for _attempt in range(2):
         try:
-            raw = agent_runtime.run_agent(agent_fn, task)
+            raw = agent_runtime.run_agent(agent_fn, task, context)
             parsed = agent_runtime.parse_json_output(raw)
             if isinstance(parsed, dict):
                 enrichment = parsed

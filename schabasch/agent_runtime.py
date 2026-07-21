@@ -4,7 +4,7 @@ Public:
     build_agent(cfg, *, system_prompt, max_turns) -> Callable[[str], str]
     run_agent(agent_fn, task) -> str
 
-Requires kl_agent_builder (pip install -e ~/code/work/KatherLab/prototype-internal-KL).
+Requires kl_agent_builder (pip install -e <local prototype-internal-KL checkout>).
 Gracefully raises ImportError when not installed — callers must catch.
 
 Env-override caveat: KL_MODEL/KL_BASE_URL/KL_API_KEY override any dict config.
@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 # it. The happy path (~2 turns, ~4k tokens, <60s) is well within them.
 #
 # NOTE (measured 2026-06-16): a per-model "strong" budget that RAISED max_turns to 10 for non-qwen
-# was tried and REJECTED — it regressed kather `sota` from 4/5 → 3/5 on the real top-5 cards. With
+# was tried and REJECTED — it regressed the remote `sota` tier from 4/5 → 3/5 on the real top-5 cards. With
 # the finalize contract below, the model finalizes promptly at ~turn 5; extra turns only invite it
 # to wander PAST coverage-complete (MAX_WANDERING=8) and accumulate context past max_input_tokens →
 # completion_guard_force_synthesized / budget_exceeded → ungrounded salvage. Tight bounds + a clear
@@ -63,6 +63,30 @@ _FINALIZE_CONTRACT = (
 )
 
 
+def _snippet_search_tool(timeout_s: float, backend: str, searxng_url: str | None):
+    """The agent's WebSearchTool, but with kl's empty-snippet DuckDuckGo HTML scraper swapped for
+    schabasch's ddgs adapter (browsing/search.py) which returns rich snippet BODIES.
+
+    Root-cause fix (measured 2026-06-21, card 1496): kl's ``ddg`` backend returns titles+URLs with
+    EMPTY snippets, so the agent can't read the company description from search results — it re-searches
+    the same query 3-4× and exhausts max_turns without ever finalizing. schabasch's ddgs search already
+    returns bodies ("equensWorldline SE is a payment company…"), so one search suffices. We reuse kl's
+    tool descriptor + ``_format_results`` and only swap the result-fetch; on an empty ddgs result we
+    fall back to kl's original scraper (never worse). Generalizable to every investigate/discover run."""
+    from kl_agent_builder.tools.web.search_tool import WebSearchTool  # type: ignore
+
+    from .browsing import search as _search
+
+    class _SnippetWebSearchTool(WebSearchTool):  # type: ignore[misc]
+        def _search_ddg(self, query, max_results):  # noqa: ANN001
+            hits = _search.search(query, max_results=max_results, searxng_url=searxng_url)
+            if hits:
+                return self._format_results(query, hits, backend="ddg")
+            return super()._search_ddg(query, max_results)  # ddgs empty → kl's scraper
+
+    return _SnippetWebSearchTool(timeout_seconds=timeout_s, backend=backend)
+
+
 def build_agent(cfg: dict, *, system_prompt: str, max_turns: int | None = None) -> Callable[[str], str]:
     """Build and return a ReAct agent callable (task: str) -> str.
 
@@ -73,7 +97,6 @@ def build_agent(cfg: dict, *, system_prompt: str, max_turns: int | None = None) 
     from kl_agent_builder.llm import LLMClient  # type: ignore
     from kl_agent_builder.shared.sandbox import CodeExecutor  # type: ignore
     from kl_agent_builder.tools.web.fetch_tool import WebFetchTool  # type: ignore
-    from kl_agent_builder.tools.web.search_tool import WebSearchTool  # type: ignore
 
     # Clear env overrides so the dict config below is authoritative
     for var in ("KL_MODEL", "KL_BASE_URL", "KL_API_KEY"):
@@ -94,7 +117,7 @@ def build_agent(cfg: dict, *, system_prompt: str, max_turns: int | None = None) 
     search_backend = b_cfg.get("search_backend") or ("searx" if searxng_url else "ddg")
 
     # Role-routed model (llm.roles.agent) — defaults to local ollama qwen3:8b, but can be pointed at
-    # the local 35B MLX server or api.kather.ai `sota` to fix qwen3:8b's max-turn exhaustion on ReAct.
+    # the local 35B MLX server or a remote OpenAI-compatible `sota` tier to fix qwen3:8b's max-turn exhaustion on ReAct.
     from .llm_clients import agent_client_params
     params = agent_client_params(cfg)
     agent_model = params["model"]
@@ -113,7 +136,7 @@ def build_agent(cfg: dict, *, system_prompt: str, max_turns: int | None = None) 
     # ReAct action-parser can't read → the loop never registers an action and exhausts max_turns
     # ('[max turns exhausted]'). '/no_think' disables thinking so the agent emits parseable actions
     # and actually reaches a final_answer. This is qwen-SPECIFIC — a stronger non-qwen model (the 35B
-    # MLX / kather sota) must NOT get the directive (it would leak into the prompt as garbage).
+    # MLX / remote sota) must NOT get the directive (it would leak into the prompt as garbage).
     # '/no_think' MUST stay the first token, so it is prepended AFTER the contract is appended.
     if "qwen" in agent_model.lower():
         system_prompt = "/no_think\n" + system_prompt
@@ -123,7 +146,9 @@ def build_agent(cfg: dict, *, system_prompt: str, max_turns: int | None = None) 
         executor=executor,
         system_prompt=system_prompt,
         tools=[
-            WebSearchTool(timeout_seconds=15.0, backend=search_backend),   # keyless (ddg/searx)
+            # ddg backend uses schabasch's snippet-returning ddgs adapter (kl's scraper returns empty
+            # snippets → the agent loops re-searching; see _snippet_search_tool). searx unchanged.
+            _snippet_search_tool(15.0, search_backend, b_cfg.get("searxng_url")),
             WebFetchTool(timeout_seconds=20.0),
         ],
         max_turns=int(a_cfg["max_turns"]),
@@ -132,9 +157,14 @@ def build_agent(cfg: dict, *, system_prompt: str, max_turns: int | None = None) 
         max_input_tokens=int(a_cfg["max_input_tokens"]),
     )
 
-    def _run(task: str) -> str:
+    def _run(task: str, context: dict | None = None) -> str:
         from kl_agent_builder import AgentInput  # type: ignore
-        output = agent(AgentInput(task=task))
+        # `context` rides in AgentInput.context (rendered into the prompt) — NOT in `task`. kl's
+        # facet-coverage gate scans ONLY `task` (runtime/loop/react.py _check_facet_coverage), so any
+        # free-text whose incidental words ('current'/'today'/a year) would otherwise be mis-extracted
+        # as a required research facet — and silently BLOCK an already-valid final_answer until
+        # max_turns — must be passed as context, not inlined into the task. See investigate.py.
+        output = agent(AgentInput(task=task, context=context or {}))
         # telemetry: surface token cost + why the run stopped (cost-telemetry pattern)
         md = getattr(output, "metadata", None) or {}
         usage = (md.get("token_usage_by_model") or {}) if isinstance(md, dict) else {}
@@ -152,9 +182,11 @@ def build_agent(cfg: dict, *, system_prompt: str, max_turns: int | None = None) 
     return _run
 
 
-def run_agent(agent_fn: Callable[[str], str], task: str) -> str:
-    """Invoke a built agent and return its final content string."""
-    return agent_fn(task)
+def run_agent(agent_fn: Callable[..., str], task: str, context: dict | None = None) -> str:
+    """Invoke a built agent and return its final content string. `context` (optional) is passed to
+    AgentInput.context — use it for free-text the model should see but that must stay OUT of the kl
+    facet-coverage scan (which reads only `task`); see build_agent._run."""
+    return agent_fn(task, context)
 
 
 def parse_json_output(text: str) -> Any:

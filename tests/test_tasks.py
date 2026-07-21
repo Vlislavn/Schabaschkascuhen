@@ -111,6 +111,6 @@ def test_engineer_role_downranks_in_slate(file_cfg):
            "score": 4, "elig_score": 1.0}
     ana = {"title": "Senior Business Analyst", "summary": "", "fit_score": 0.6,
            "score": 4, "elig_score": 1.0}
-    cfg = {}
+    cfg = {"slate": {"role_kind_mult": {"hands_on_engineer": 0.45}}}  # her taste, explicit
     eff = lambda x: x["fit_score"] * x["elig_score"] * rk.multiplier(rk.classify(x["title"]), cfg)
     assert eff(eng) < eff(ana)   # engineer down-ranked, analyst untouched

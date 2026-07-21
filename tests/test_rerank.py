@@ -147,6 +147,53 @@ def test_rerank_scored_top_k_respected(con, cfg, monkeypatch):
     assert result.get("reranked", 0) == 1
 
 
+def test_rerank_drains_unprocessed_below_top_score(con, cfg, monkeypatch):
+    """Regression — cold-start starvation (the «куда деваются вакансии» bug). The top-by-judge
+    candidate already carries xenc; a LOWER-scored one does not. The OLD code did
+    `ORDER BY score DESC LIMIT k` then POST-filtered fresh rows, so with k=1 the fresh top-1
+    drained to 'all_fresh' and the unprocessed job NEVER got reranked → fit_score stuck at 0 →
+    couldn't fill an exploit slot. The WHERE-clause freshness filter now selects the top UNPROCESSED."""
+    _seed_candidate(con)
+    hi = _seed_scored(con, "u/hi", score=5)   # old gem: already reranked
+    lo = _seed_scored(con, "u/lo", score=3)   # newer: extract_features ran, rerank never did
+    con.execute(
+        "INSERT OR REPLACE INTO vacancy_feature (vacancy_id, match_score, feature_json, computed_at)"
+        " VALUES (?,?,?,datetime('now'))",
+        (hi, 0.7, json.dumps({"match_score": 0.7, "xenc_full": 0.8, "fit_score": 0.8})),
+    )
+    con.execute(
+        "INSERT OR REPLACE INTO vacancy_feature (vacancy_id, match_score, feature_json, computed_at)"
+        " VALUES (?,?,?,datetime('now'))",
+        (lo, 0.3, json.dumps({"match_score": 0.3})),   # partial row, NO xenc — the real case
+    )
+    con.commit()
+    monkeypatch.setattr(features, "_load_reranker", lambda name: FakeReranker())
+    out = features.rerank_scored(cfg, con, top_k=1)
+    assert out.get("reranked") == 1                       # processed lo, did NOT short-circuit 'all_fresh'
+    lo_feat = features.feature_row(con, lo)
+    assert lo_feat.get("xenc_full") is not None           # lo finally reranked → fit can exceed 0
+    assert lo_feat.get("fit_score") is not None
+
+
+def test_rerank_prioritizes_fresh_over_old_within_budget(con, cfg, monkeypatch):
+    """Regression — among judge-score ties the bounded top_k must go to the FRESHEST unprocessed
+    (last_seen DESC), the cards the daily slate actually shows (last_seen within fresh_days). The old
+    `ORDER BY js.score DESC` alone broke ties by id ASC → oldest-first → reranked stale judge-2 cards
+    while the fresh slate pool starved at fit=0. With top_k=1 the fresh job must win."""
+    _seed_candidate(con)
+    old = _seed_scored(con, "u/old", score=2)
+    new = _seed_scored(con, "u/new", score=2)
+    con.execute("UPDATE vacancy SET last_seen='2026-06-01T00:00:00+00:00' WHERE id=?", (old,))
+    con.execute("UPDATE vacancy SET last_seen='2026-06-30T00:00:00+00:00' WHERE id=?", (new,))
+    con.commit()
+    monkeypatch.setattr(features, "_load_reranker", lambda name: FakeReranker())
+    out = features.rerank_scored(cfg, con, top_k=1)
+    assert out.get("reranked") == 1
+    assert features.feature_row(con, new).get("xenc_full") is not None    # fresh got the budget
+    old_feat = features.feature_row(con, old)
+    assert old_feat is None or old_feat.get("xenc_full") is None          # stale did NOT
+
+
 def test_rerank_scored_multiple_vacancies(con, cfg, monkeypatch):
     """Reranks all SCORED within top_k."""
     _seed_candidate(con)

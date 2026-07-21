@@ -17,8 +17,20 @@ from . import db
 from .llm import LLMError, OllamaClient
 from .models import WHY_TAGS, Status
 
+# Fallback single-user vocabulary (the original persona). Per-user magnets/repellents come from
+# cfg.profile via _persona() — WHY_TAGS is only the default when a profile doesn't define them.
 MAGNETS = WHY_TAGS[:6]
 REPELLENTS = WHY_TAGS[6:]
+
+
+def _persona(cfg: dict) -> tuple[list[str], list[str]]:
+    """Per-user (magnets, repellents) tag lists from cfg.profile — the multi-user fix: the judge
+    used to read the frozen WHY_TAGS for every user, so user #2 was scored against user #1's
+    taste (e.g. `biotech` as a repellent for someone whose target domain IS biotech)."""
+    p = (cfg or {}).get("profile") or {}
+    magnets = [str(t) for t in (p.get("magnets") or [])] or list(MAGNETS)
+    repellents = [str(t) for t in (p.get("repellents") or [])] or list(REPELLENTS)
+    return magnets, repellents
 
 
 def _card_brief(card: dict) -> str:
@@ -68,67 +80,63 @@ def render_fewshot(rows) -> tuple[str, str]:
     return text, digest
 
 
-def build_fewshot(con, max_n: int) -> tuple[str, str]:
+def build_fewshot(con, max_n: int, vocab: list[str] | None = None) -> tuple[str, str]:
     """(fewshot_text, fewshot_hash) из СВЕЖАЙШИХ крайних меток, newest-first.
 
     Крайние = негативный якорь (score<=2: 👎) ∪ сильный позитив (score=5: ⭐). Раньше брали
     ровно {1,5}, но единственная веб-кнопка для негатива даёт 👎=2 (литеральная 1 в UI нет) —
     значит 👎-фидбек НИКОГДА не попадал в few-shot и судья не учился отталкивателям с реальных
     меток. <=2 чинит это; render_fewshot мапит score==5→магнит, иначе→отталкиватель.
-    Метки с why_tag вне текущего словаря WHY_TAGS (наследие прошлой персоны/рубрики) исключаются,
-    чтобы few-shot не учил судью чужими тегами; why_tag=NULL допускается."""
-    placeholders = ",".join("?" for _ in WHY_TAGS)
+    Метки с why_tag вне текущего словаря (наследие прошлой персоны/рубрики) исключаются,
+    чтобы few-shot не учил судью чужими тегами; why_tag=NULL допускается. `vocab` — словарь тегов
+    ЭТОГО пользователя (магниты+отталкиватели из cfg.profile); None → WHY_TAGS (legacy)."""
+    vocab = list(vocab) if vocab else list(WHY_TAGS)
+    placeholders = ",".join("?" for _ in vocab)
     rows = con.execute(
         f"""SELECT l.score_1_5, l.why_tag, l.why_freetext, v.card_json, l.created_at
            FROM label l JOIN vacancy v ON v.id = l.vacancy_id
            WHERE (l.score_1_5 <= 2 OR l.score_1_5 = 5) AND v.card_json IS NOT NULL
              AND (l.why_tag IS NULL OR l.why_tag IN ({placeholders}))
            ORDER BY l.created_at DESC, l.id DESC LIMIT ?""",
-        (*WHY_TAGS, max_n),
+        (*vocab, max_n),
     ).fetchall()
     return render_fewshot(rows)
 
 
 def build_system_prompt(cfg: dict, fewshot: str) -> str:
+    """Per-user judge persona: magnets/repellents + free-text taste rules all come from
+    cfg.profile (multi-user fix — they used to be hardcoded to user #1's taste; her rules now
+    live verbatim in HER profile.yaml `taste_rules`)."""
     p = cfg.get("profile", {})
     scale = p.get("scale", {})
     scale_txt = "\n".join(f"  {k} = {v}" for k, v in sorted(scale.items(), reverse=True))
+    magnets, repellents = _persona(cfg)
+    vocab = magnets + repellents
+    # Per-user free-text judging rules (profile.taste_rules: list[str]); empty = generic judge.
+    taste = "".join(f"- {str(r).strip()}\n" for r in (p.get("taste_rules") or []) if str(r).strip())
     return (
         "Ты — персональный судья вакансий для пользователя. Оцени ОДНУ карточку по рубрике и верни "
         "ТОЛЬКО JSON-объект:\n"
         '{"score": 1..5, "why_tag": str|null, "why_freetext": str|null, "explanation": str}\n\n'
         f"ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ:\n{p.get('summary','').strip()}\n\n"
         f"ШКАЛА:\n{scale_txt}\n\n"
-        f"МАГНИТЫ (тянут к 4–5): {', '.join(MAGNETS)}\n"
-        f"ОТТАЛКИВАТЕЛИ (тянут к 1–2): {', '.join(REPELLENTS)}\n\n"
+        f"МАГНИТЫ (тянут к 4–5): {', '.join(magnets)}\n"
+        f"ОТТАЛКИВАТЕЛИ (тянут к 1–2): {', '.join(repellents)}\n\n"
         "ПРАВИЛА:\n"
-        f"- why_tag — РОВНО один из словаря: {', '.join(WHY_TAGS)} (или null, если ни один не главный).\n"
+        f"- why_tag — РОВНО один из словаря: {', '.join(vocab)} (или null, если ни один не главный).\n"
         "- Главный драйвер оценки → why_tag; нюансы → why_freetext (по-русски, кратко).\n"
         "- explanation — одно предложение по-русски, почему именно эта оценка.\n"
-        "- Скрытый немецкий, remote-only, биотех, slop-текст уже частично отфильтрованы — но если "
-        "видишь стоп-фактор в карточке, понижай оценку и ставь соответствующий тег.\n"
+        "- Часть отталкивателей уже частично отфильтрована до судьи — но если видишь стоп-фактор "
+        "из списка отталкивателей в карточке, понижай оценку и ставь соответствующий тег.\n"
         "- slop_score — плотность AI-слопа/буллшита (0 = конкретно, 70+ = вода без конкретики). "
         "Градуированно: slop_score ≥ 45 → мягкий минус; ≥ 60 → текст пустой/слоп, понижай сильнее и "
         "ставь тег slop-text (пример сигнала: «какой-то AI слоп текст»).\n"
-        "- Пользователь хочет работать ГОЛОВОЙ, не руками: чисто hands-on dev/инженер-роль («сама пишу код "
-        "целыми днями») — мягкий отталкиватель (снизь на 1, можно работать С разработчиками, но "
-        "не быть одним из них). Роли lead/principal/ownership — наоборот, тяни вверх. Monthly/жёсткие "
-        "дедлайны/рутинная операционка — мягкий минус (стресс, рутина).\n"
-        "- Скучная зарегулированная операционка (GMP/GxP, чистый комплаенс/качество, рутинный "
-        "контроллинг без изюминки) → тег boring-role, мягкий минус (пример: «GMP/GxP кажется скучным»).\n"
-        "- work_mode='onsite' без упоминания hybrid/remote-option → мягкий отталкиватель: "
-        "снизь оценку на 1. Пользователь ищет гибридный формат, не чисто офисный.\n"
-        "- Пользователь ищет новую область. Приоритет магнитов по убыванию: "
-        "animals > space > military-security > public-sector > complex-projects > new-domain. "
-        "Если подходит более конкретный магнит, не используй complex-projects.\n"
-        "- complex-projects — ТОЛЬКО для реально крупных системных / инфраструктурных проектов "
-        "(спутниковые системы, боевые комплексы, критическая госинфраструктура). "
-        "Обычная ML, аналитика, веб-разработка — НЕ complex-projects.\n"
+        + taste +
         "- Не выдумывай факты сверх карточки; при нехватке сигнала ставь 3.\n\n"
         + (f"ПРИМЕРЫ (из пользовательских меток):\n{fewshot}\n\n" if fewshot else "")
-        + 'Пример валидного ответа: {"score": 4, "why_tag": "space", '
-          '"why_freetext": "аэрокосмический домен + гибрид под Франкфуртом", "explanation": '
-          '"Космос-магнит и подходящая локация — почти шабашка."}'
+        + (f'Пример валидного ответа: {{"score": 4, "why_tag": "{magnets[0]}", '
+           f'"why_freetext": "сильный магнит-домен + подходящий формат", "explanation": '
+           f'"Домен-магнит и подходящие условия — почти шабашка."}}')
     )
 
 
@@ -147,7 +155,9 @@ def judge_pending(cfg: dict, con) -> dict[str, int]:
     model = getattr(client, "model", llm_cfg.get("judge_model", "qwen3:8b"))
     digest = client.model_digest()
     rubric_version = judge_cfg.get("rubric_version", "v1")
-    fewshot, fewshot_hash = build_fewshot(con, int(judge_cfg.get("fewshot_max", 6)))
+    magnets, repellents = _persona(cfg)
+    vocab = magnets + repellents
+    fewshot, fewshot_hash = build_fewshot(con, int(judge_cfg.get("fewshot_max", 6)), vocab)
     system = build_system_prompt(cfg, fewshot)
 
     rows = db.by_status(con, Status.NORMALIZED)
@@ -174,7 +184,7 @@ def judge_pending(cfg: dict, con) -> dict[str, int]:
             continue
         why_tag = obj.get("why_tag")
         why_freetext = obj.get("why_freetext")
-        if why_tag is not None and why_tag not in WHY_TAGS:
+        if why_tag is not None and why_tag not in vocab:
             # тег вне словаря → не врём схеме: переносим в freetext, тег обнуляем.
             why_freetext = (f"[{why_tag}] " + (why_freetext or "")).strip()
             why_tag = None

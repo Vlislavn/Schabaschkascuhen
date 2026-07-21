@@ -142,7 +142,10 @@ def eval_report(cfg, con) -> dict
 def gap_report(cfg, con) -> dict
     # WANTED = label.score_1_5>=4 OR applied=1; aggregate feature_json.llm_cov_reqs across them →
     # per-requirement {missing, partial, present, jobs}, ranked by (missing + 0.5*partial) desc.
-    # → {n_wanted, n_jobs_with_reqs, rows, reliable, candidate_skills}. Drives /gaps + CLI `gaps`.
+    # RECONCILE: drop requirements the candidate provably meets via eligibility ordinals (education
+    # ISCED level / language CEFR) — noisy judge false-missings, not real gaps.
+    # → {n_wanted, n_jobs_with_reqs, rows, reliable, candidate_skills, n_reconciled, reconciled}.
+    # Drives /gaps + CLI `gaps`.
 ```
 
 ## feedback_app.py
@@ -160,6 +163,8 @@ def create_app(cfg: dict) -> fastapi.FastAPI
     # GET /backlog.json -> {cards, total} judged-but-unrated pool (annotation_batch) — bot /more.
     # nightly_tick summary + /fetch-status.summary now carry delta {scraped,new,reseen,slate_size,
     #   slate_new,wall_seconds} — honest "X scraped, Y new, slate unchanged" (bot greet + /why).
+    # serve.fast_ready=True exposes an already-scored slate immediately on startup; the full quality fetch
+    #   still runs in the background. Cold DBs wait for the first built slate.
     # GET /funnel   -> воронка + канарейки + dedup_candidates (parsed dedup_fuzzy) + dedup_count (json).
     # POST /fetch   -> async full pipeline (nightly_tick) on a background worker, SINGLE-FLIGHT
     #                  (409 if running — no double model-load). GET /fetch-status -> {running, stage, …}.
@@ -217,6 +222,8 @@ slate.effective_score(fields, cfg, con=None) → production slate ranking score 
   itself + the quality_floor gate stay pure fit (recency reorders, never disqualifies). recency_floor 1.0 = off.
 role_kind.multiplier(kind, cfg=None, con=None) → role down-rank; learned from label_role when role_kind_learn.enabled + con.
 role_feedback.{record,fit_counts,veto_map}(con, ...) → label_role sidecar (role-fit axis; source slate|debug firewall).
+eligibility.meets_education(req_text, cand) / .meets_language(req_text, cand) → bool; shared
+  free-text requirement↔candidate_quals matchers (ISCED level / CEFR). Single source, reused by gaps.py.
 eligibility.req_from_cache(con, content_hash, jd_text) → cached req + guards (no LLM); None on miss.
 eligibility.jd_hard_blocker(jd_text, patterns, *, floor) → (floor, reason, "structural") | None — deterministic
   legal-barrier blocker (clearance/citizenship) from config eligibility.hard_blockers; empty patterns = off.
@@ -233,8 +240,9 @@ investigate.validate_company(name, agent_enrichment, cache) → {company_descrip
   legal-suffix; cross-checks the agent. investigation enrichment adds those fields; patches feature
   company_known (=verified) + german_rooted.
   Redundant-work gates: investigate_top SELECTs only top-N SCORED NOT already in `investigation` (the
-  agent never re-runs on done/closed jobs); rerank_scored skips candidates that already carry a fresh
-  xenc_full and returns {skipped:all_fresh} WITHOUT loading the reranker when none need (re)scoring.
+  agent never re-runs on done/closed jobs); rerank_scored selects only the top SCORED/SLATED candidates
+  NOT yet reranked (xenc_full IS NULL in the candidate WHERE — cascade freshness, not top-k-then-filter)
+  and returns {skipped:all_fresh} WITHOUT loading the reranker when none need (re)scoring.
 browsing.entity.resolve(name, *, lang="en") → typed company entity via keyless Wikidata
   (wbsearchentities org-type + name-match guard → wbgetentities) → {qid, label, description,
   official_site, country, employees, inception, wikidata_url} | None. Adapter over an imported API,
@@ -264,7 +272,7 @@ entry: `python -m schabasch.cli ...` (и console_script `schabasch`).
 ## Additive modules / endpoints / config (2026-06-16) — frozen files untouched
 ```python
 # schabasch/llm_clients.py — model cascade (OpenAI-compatible alongside the frozen OllamaClient)
-class OpenAIClient: chat_json(system, user) -> dict   # mlx_lm.server / api.kather.ai; reasoning_content fallback
+class OpenAIClient: chat_json(system, user) -> dict   # mlx_lm.server / any remote provider; reasoning_content fallback
 make_llm_client(cfg, role) -> OllamaClient | OpenAIClient    # role ∈ normalizer|judge|candidate|agent|deep_reasoning|sota
 role_available(cfg, role) -> bool          # openai roles need a key (localhost assumed up); skips keyless sota
 agent_client_params(cfg) -> {provider, base_url, model, api_key}   # for agent_runtime (role 'agent')
@@ -352,3 +360,111 @@ triage.deploy_min_spearman: 0.0   # deploy gate: keep prior model when temporal-
   (measured local enrichment win); the 35B MLX is an opt-in swap. `agent` stays qwen3:8b.
 - `agent_runtime._AGENT_DEFAULTS` gained `strong_max_turns`/`strong_max_tool_calls`/
   `strong_max_wall_time_seconds` for the non-qwen agent path (kl give-up guard fires at 8).
+
+## Multi-user (2026-07-03) — frozen files untouched, all additive
+```python
+# users.py — DB-per-user isolation layer (identity = Telegram chat_id, the bot is the front door)
+def load(key: str | None = None) -> dict          # 'default'/None -> config.load(); else deep-merge
+    # config/users/<key>.yaml over the base; db/slate_dir/model_dir/golden_csv FORCED to
+    # data/users/<key>/… unless the overlay overrides (a shared model_dir would cross-overwrite
+    # triage.joblib). Unknown key -> FileNotFoundError; bad key chars -> ValueError.
+def list_users() -> list[str]                     # ['default'] + config/users/*.yaml stems (sans example)
+def by_telegram_id(chat_id: int) -> str | None    # registry match on telegram.chat_id; 0 never matches
+def registry() -> list[dict]                      # [{user, chat_id}] — the /users.json payload
+```
+- `feedback_app`: every GET honors `?user=<key>`, every POST body (`Feedback`/`RoleFeedback`/
+  `TaskStatusBody`) gained `user: str = "default"` (additive) — resolved per request to that user's
+  cfg+DB; unknown user → 404 (never falls through to another DB). `_FETCH_STATE` is now per-user
+  (`_fetch_state(user)`); `_FETCH_LOCK` stays a single global (one model-heavy tick at a time).
+  New `GET /users.json`. `serve()`: per-user refetch guard; startup pipeline loops stale users
+  sequentially; >1 user → no single TELEGRAM_CHAT_ID lock (bot env gets SCHABASCH_MULTI_USER=1
+  and resolves identity via /users.json).
+- `slate.py` renderers (`render_html`/`render_annotate_html`/`render_eval_html`/`render_tasks_html`/
+  `render_gaps_html`/`_page`) gained `user: str = "default"` (additive, default output unchanged):
+  nav links carry `&user=`, JS posts carry `user: USER`, topbar shows a user switcher when >1 user.
+- `cli.py`: app-level `--user` option (`schabasch --user bob tick`); `tick` with no `--user` loops
+  ALL users sequentially (nightly plist stays a single command).
+
+## Telegram self-registration (2026-07-03) — additive, max 2 users
+```python
+# users.py additions
+MAX_USERS = 2                                     # registration cap — the one knob
+def derive_key(name: str, chat_id: int) -> str    # tg display name -> unique valid key
+def create_user(key: str, overlay: dict) -> Path  # write overlay yaml + materialize DB; fail-loud on
+                                                  #   cap / dup chat_id / existing key / invalid key
+def update_overlay(key: str, patch: dict) -> None # deep-merge into an existing overlay yaml
+def delete_user(key: str) -> None                 # yaml + data/users/<key>/ removal (rollback)
+
+# registration.py (new sidecar module)
+def resolve_city(name) -> dict                    # offline geo.CITY_COORDS exact + rapidfuzz suggestions
+def register_user(base_cfg, *, chat_id, name, city, cv_text=None, cv_path=None, queries=None) -> dict
+    # create -> candidate.extract_candidate (into the NEW user's DB) -> derive queries_en (target_roles)
+    # + profile.summary -> rewrite overlay. Rollback (delete_user) on extraction failure.
+    # raises RegistrationError(status=409 cap/dup | 422 bad input(+suggestions) | 500 extract-failed)
+```
+- `feedback_app`: `POST /register` (RegisterBody: chat_id, name, cv_text?, cv_path? (≤2 MB, same-host
+  bot), city, queries?) and `GET /geo-resolve?city=`. `/users.json` response gained `max_users`.
+- Overlay contract (pinned by tests): `search.queries_en`/`queries_de` (NOT bare `queries`),
+  `geo.anchors` = dict `{City: {lat, lon, radius_km}}` (NOT a list), non-zero `telegram.chat_id`.
+- Bot contract: unknown chat + free slot → registration wizard (CV file/text → city → queries|🪄);
+  registered chats resolve via /users.json and pass `user=<key>` on every call.
+
+## De-personalization (2026-07-03) — per-user taste, frozen files untouched
+```python
+# judge.py: _persona(cfg) -> (magnets, repellents) from cfg.profile (fallback models.WHY_TAGS);
+#   build_system_prompt renders profile.taste_rules (list[str]); build_fewshot(con, n, vocab=None);
+#   why_tag validated against the USER's vocabulary.
+# hardfilters.py: active_repellents(cfg) -> set — which hard drops are ON for this user
+#   (hidden-german / remote-only / temp-agency ∈ profile.repellents); no profile → all on (legacy).
+#   normalize._filter_card gates the card-level drops the same way.
+# role_kind.py: _DEFAULT_MULT is NEUTRAL (1.0); penalties live in slate.role_kind_mult per user;
+#   flag(kind, cfg=None) returns "" when the user doesn't penalize the kind.
+# enrichment.py: _system_prompt(cfg) injects profile.summary + repellents (was a module constant
+#   with user-1 cons hardcoded).
+# slate._fit_fields: adds role_flag_off (kinds this user doesn't penalize → no card flag).
+# registration.register_user: overlay now carries profile.scale/taste_rules, judge.rubric_version
+#   (v1-<key>), slate.role_kind_mult neutral, and CV-derived profile.magnets/repellents
+#   (+ safety repellents hidden-german/slop-text/temp-agency).
+```
+Config contract: profile.magnets/repellents/taste_rules/scale are PER-USER judge inputs;
+slate.role_kind_mult is per-user; the base profile.yaml now carries user #1's former hardcoded
+taste explicitly (behavior-preserved).
+
+## Funnel-expansion sources (2026-07-03) — all keyless, frozen files untouched, additive
+```python
+# schabasch/sources/social.py — NEW. Person-posts: Bluesky searchPosts (api.bsky.app, unauth =
+#   first page only, cap logged) + Mastodon hashtag timelines (per-instance) + Telegram public
+#   channel previews (t.me/s/<handle>). Hard gates BEFORE upsert (len → hiring lexicon →
+#   query-token relevance → freshness.too_old); survivors → description → DESCRIBED → normalize.
+scrape(cfg, con) -> dict[str, int]            # {"bluesky": new, "mastodon": new, "telegram": new}
+
+# schabasch/sources/hn_hiring.py — NEW. Monthly "Ask HN: Who is hiring?" via keyless Algolia
+#   (2 requests/tick). Thread rule = structurally person-posted. Region-filtered to cfg cities +
+#   Germany/EU/Remote; own 35-day window (monthly cadence; the global gate would empty it).
+scrape(cfg, con) -> dict[str, int]            # {"hn": new}
+
+# schabasch/sources/ats_boards.py — NEW. Direct public ATS boards (greenhouse, lever, lever-eu,
+#   ashby, personio, workable, recruitee, smartrecruiters — SR keyless confirmed by live curl
+#   2026-07-03). Slug-probe per company → sidecar table `ats_board`
+#   (company, ats, slug, last_ok, last_probe; misses cached, re-probe every 30d); fetch by cache
+#   each tick. NO freshness gate (presence on a live board = liveness proof). source = "ats:<name>".
+scrape(cfg, con) -> dict[str, int]            # {"<ats>": new, ...}
+ensure_tables(con) -> None
+
+# schabasch/pipeline.py — nightly_tick: 3 new opt-in steps (scrape_social / scrape_hn / scrape_ats),
+#   gated on config flags (not CLI — the multi-user tick reads per-user cfg); counted in delta.
+# schabasch/sources/jobspy_source.py — allowed sources filter now also passes "glassdoor" (opt-in
+#   via search.sources; jobspy fork supports it).
+```
+```yaml
+search.social: false                # person-post mining on/off (bluesky + mastodon + telegram)
+search.social_instances: [...]      # default [mastodon.social, hachyderm.io, mastodon.online]
+search.social_hashtags: [...]       # default [hiring, fedihire, getfedihired]
+search.telegram_channels: []        # public channel handles (verify t.me/s/<handle> first)
+search.hn_hiring: false             # HN Who-is-hiring thread
+search.ats: false                   # direct ATS board enumeration
+search.ats_companies: []            # companies to probe (falls back to search.target_companies)
+```
+Research verdicts (live receipts 2026-07-03): Twitter/X not keyless-viable (free tier closed
+02/2026, Nitter dead); Reddit .json 403 since ~05/2026; LinkedIn posts — no legal keyless path.
+Sidecar added (additive, db.py schema frozen): `ats_board`.

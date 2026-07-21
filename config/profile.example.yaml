@@ -47,10 +47,22 @@ search:
   # linkedin_hours_old: 24   # ECONOMY (opt-in): tighter LinkedIn window → fewer/fresher jobs, ~half
                              #   the LinkedIn re-fetch time. Unset = use hours_old.
   results_wanted: 25
-  sources: [indeed, linkedin, arbeitsagentur]
+  sources: [indeed, linkedin, arbeitsagentur]   # jobspy also supports: glassdoor (add to try it)
   agent_discovery: false   # opt-in ReAct web crawl — low yield with local qwen3:8b (needs SearXNG
                            # / a stronger model to be productive); board scrapers do the real work
   # target_companies: []   # optional override for the employers the discovery agent targets
+  # --- funnel-expansion sources (2026-07 research; all keyless, all opt-in) ---
+  social: false            # person-posts: Bluesky search + Mastodon hashtag timelines + Telegram
+                           #   public-channel previews (t.me/s/). Hard keyword gate before the LLM.
+  # social_instances: [mastodon.social, hachyderm.io, mastodon.online]
+  # social_hashtags: [hiring, fedihire, getfedihired]
+  # telegram_channels: [germantechjobs, jobinberlin]   # public handles polled via t.me/s/<handle>
+                           #   (both live-verified 2026-07-03; check new ones: curl https://t.me/s/<handle>)
+  hn_hiring: false         # monthly "Ask HN: Who is hiring?" thread (structurally person-posted;
+                           #   dev/US-skewed — filtered to cfg cities + Germany/EU/Remote mentions)
+  ats: false               # direct ATS boards (greenhouse/lever/ashby/personio/workable/recruitee/
+                           #   smartrecruiters) — public JSON/XML, no keys, no anti-bot
+  # ats_companies: []      # companies to probe for public ATS boards (falls back to target_companies)
 
 geo:
   anchors:
@@ -78,8 +90,9 @@ llm:
     agent:      {client: ollama, model: "qwen3:8b"}
     # deep_reasoning DEFAULT = local ollama qwen3.5:4b (fast, ~3.4 GB, profile-aware pros/cons).
     deep_reasoning: {client: ollama, model: "qwen3.5:4b"}
-    # sota = opt-in remote tier; needs OPENAI_API_KEY (never stored). Falls back to ollama if absent.
-    sota: {client: openai, model: "sota", base_url: "https://api.kather.ai/v1",
+    # sota = opt-in remote tier (any OpenAI-compatible provider); needs OPENAI_API_KEY (never stored).
+    # Falls back to ollama if absent.
+    sota: {client: openai, model: "sota", base_url: "https://api.example.com/v1",
            api_key_env: "OPENAI_API_KEY", max_tokens: 16000, timeout_s: 300}
 
 deep:                          # W3 abstractive card-enrichment (pros/cons + deep company + slop re-parse)
@@ -133,8 +146,9 @@ slate:
     n_min: 5                # golden role votes per kind before the learned rate overrides the static default
     alpha: 3.0              # Beta/shrink prior strength (smaller = trust real votes faster)
     mult_floor: 0.5         # recall-first: a fully-disliked kind never hard-drops below this
-  quality_floor: 0.45       # an exploit slot must clear this `effective` score (below-floor → explore only,
-                            #   never hidden). Thin day → fewer cards, not junk padding.
+  quality_floor: 0.37       # an exploit slot must clear this `effective` score (below-floor → explore only,
+                            #   never hidden). Thin day → fewer cards, not junk padding. The role-kind mult
+                            #   (not the floor) excludes engineers; keep the floor below the engineer cap.
   fit_gate_floor: 0.25      # legacy (old judge-led gate); used only by the eval synthetic-GOLD path
   hyre_blend: 0.1
   fit_warn_threshold: 0.4   # below this, the card shows a ⚠ "big skill gap" note
@@ -146,7 +160,9 @@ slate:
 
 serve:                      # `schabasch serve` startup behavior
   fetch_on_start: true      # retrain (checkpointing the previous model) + full fetch on every start,
-                            #   then the bot greets when ready. `serve --no-fetch` skips it.
+                            #   with an immediate existing slate when possible. `serve --no-fetch` skips it.
+  fast_ready: true          # expose an already-scored slate immediately; the fresh high-quality fetch
+                            #   continues in the background. Cold DBs still wait for the first slate.
   refetch_after_hours: 12   # but SKIP the startup fetch if one completed within this many hours (a
                             #   quick restart reuses the recent slate). 0 = always fetch; `--refetch` forces.
   investigate_seed: 2       # investigate the top-N cards before greeting; the rest enrich on-the-go.

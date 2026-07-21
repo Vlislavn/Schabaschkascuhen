@@ -229,9 +229,53 @@ def candidate_quals(profile: dict | None) -> dict:
     }
 
 
+# --- shared requirement↔candidate matchers (single source; reused by the gate AND gaps.py) --------
+# language surface term / ISO code → normalized code. Bare 2-letter codes are for the gate's exact
+# structured-field lookup; free-text detection (meets_language) uses only the ≥4-char NAME keys so it
+# never mistakes the English word "it" for Italian.
+_LANG_TERMS = {
+    "en": "en", "english": "en", "englisch": "en",
+    "de": "de", "german": "de", "deutsch": "de",
+    "ru": "ru", "russian": "ru", "russisch": "ru",
+    "fr": "fr", "french": "fr", "francais": "fr", "französisch": "fr",
+    "es": "es", "spanish": "es", "spanisch": "es",
+    "it": "it", "italian": "it", "italienisch": "it",
+    "zh": "zh", "mandarin": "zh", "chinese": "zh", "chinesisch": "zh",
+    "ko": "ko", "korean": "ko", "ja": "ja", "japanese": "ja",
+    "pt": "pt", "portuguese": "pt", "nl": "nl", "dutch": "nl",
+    "pl": "pl", "polish": "pl", "ar": "ar", "arabic": "ar",
+}
+# a language NAME signals a proficiency requirement only alongside a cue (guards "English-language
+# publications" = a publication gap, not a language gap).
+_LANG_CUES = ("fluen", "proficien", "spoken", "written", "command of", "native", "mother tongue",
+              "sprachkenntnis", "verhandlungssicher", "knowledge of", "language skill", "communicat",
+              "speak", "level")
+_CEFR_TEXT_RE = re.compile(r"\b([abc][12])\b")
+
+
+def meets_education(req_text: Any, cand: dict) -> bool:
+    """True if the candidate's KNOWN degree level ≥ the level named in a free-text requirement.
+    `cand` is a candidate_quals() dict. Reuses normalize_education — the one degree parser."""
+    need = normalize_education(req_text)
+    return (need is not None and bool(cand.get("education_known"))
+            and cand.get("education_ordinal", 0) >= need)
+
+
+def meets_language(req_text: Any, cand: dict) -> bool:
+    """True if EVERY language named in a free-text proficiency requirement is held at the stated CEFR
+    (or a professional B2 floor when none is stated). `cand` is a candidate_quals() dict."""
+    low = str(req_text or "").lower()
+    hits = {code for term, code in _LANG_TERMS.items()
+            if len(term) > 3 and re.search(rf"\b{re.escape(term)}\b", low)}
+    if not hits or not (_CEFR_TEXT_RE.search(low) or any(c in low for c in _LANG_CUES)):
+        return False
+    m = _CEFR_TEXT_RE.search(low)
+    need = CEFR[m.group(1)] if m else CEFR["b2"]
+    langs = cand.get("languages") or {}
+    return all(langs.get(code, 0) >= need for code in hits)
+
+
 # --- the gate --------------------------------------------------------------------------------
-_LANG_ALIASES = {"german": "de", "deutsch": "de", "de": "de",
-                 "english": "en", "englisch": "en", "en": "en"}
 
 
 def eligibility_gate(req: dict, cand: dict, *, floor: float = 0.35, mid: float = 0.6,
@@ -291,7 +335,7 @@ def eligibility_gate(req: dict, cand: dict, *, floor: float = 0.35, mid: float =
     for L in (req.get("language_required") or []):
         if not isinstance(L, dict) or not L.get("is_hard"):
             continue
-        lang = _LANG_ALIASES.get(str(L.get("lang") or "").strip().lower())
+        lang = _LANG_TERMS.get(str(L.get("lang") or "").strip().lower())
         need = CEFR.get(str(L.get("cefr") or "").strip().lower())
         if (lang and lang != "en" and need is not None
                 and lang in cand["languages"] and cand["languages"][lang] < need):

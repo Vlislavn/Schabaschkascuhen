@@ -60,6 +60,23 @@ def test_hybrid_sparse_blend_and_fit_from_feature():
     assert abs(features.fit_from_feature({"fit_hyre": 0.8}, w) - 0.8) < 1e-6
 
 
+def test_fit_from_feature_treats_zero_hyre_as_absent():
+    """Regression (2026-06-22): a LABELED gold job that never enters the rerank pool keeps the
+    extract_features fit_hyre=0.0 default. Since HyRE carries weight 0.7, that phantom zero used to
+    drag fit to ~0 (the under-scoring bug for jobs 3321/3069 the user rated 4). A real HyRE cosine is
+    (cos+1)/2, never exactly 0.0 → 0.0 means 'not computed' and must fall back to the sparse signal."""
+    w = {"hyre": 0.7, "sparse": 0.3}
+    feat = {"fit_hyre": 0.0, "bgem3_sparse": 0.225}      # sparse_norm = 0.225/0.45 = 0.5
+    # BEFORE the fix: (0.7·0.0 + 0.3·0.5)/1.0 = 0.15 (heaviest signal zeroes the score)
+    # AFTER  the fix: hyre dropped → renormalize over sparse alone → 0.5
+    assert abs(features.fit_from_feature(feat, w, sparse_scale=0.45) - 0.5) < 1e-6
+    # a genuine (non-zero) HyRE is still blended normally
+    feat2 = {"fit_hyre": 0.8, "bgem3_sparse": 0.225}
+    assert abs(features.fit_from_feature(feat2, w, sparse_scale=0.45) - (0.7 * 0.8 + 0.3 * 0.5)) < 1e-6
+    # both signals zero/absent → 0.0 (no rescue from nothing)
+    assert features.fit_from_feature({"fit_hyre": 0.0}, w, sparse_scale=0.45) == 0.0
+
+
 def test_feature_vector_consistent_shape_with_and_without_embedding(con, cfg):
     """Regression: feature_vector must return the SAME width whether or not a bge-m3 embedding exists
     (zero-padded dense), else triage._load_labeled np.stack crashes on mixed 1053/29-dim rows and a

@@ -26,8 +26,10 @@ _ENGINEER_RE = re.compile(
     r"\b(engineer|entwickler|developer|programmer|programmierer|sde|softwareentwickl)\w*\b",
     re.IGNORECASE)
 
-# Default multipliers (config: slate.role_kind_mult). Soft, recall-first — measured on real labels.
-_DEFAULT_MULT = {"hands_on_engineer": 0.7, "junior": 0.5, "lead": 1.0, "": 1.0}
+# Default multipliers are NEUTRAL (multi-user fix 2026-07-03): the engineer/junior penalty is a
+# PERSONAL taste, not a product default — it now lives in the user's config
+# (slate.role_kind_mult; user #1's measured 0.45/0.5 moved into her profile.yaml explicitly).
+_DEFAULT_MULT = {"hands_on_engineer": 1.0, "junior": 1.0, "lead": 1.0, "": 1.0}
 
 _FLAG = {
     "hands_on_engineer": "🛠 hands-on — не твоё",
@@ -84,6 +86,10 @@ def _learned_multiplier(kind: str, default: float, learn: dict, con) -> float:
     return floor + (1.0 - floor) * max(0.0, min(1.0, p_fit))
 
 
-def flag(kind: str) -> str:
-    """Short card flag for a repellent role kind ('' for lead/neutral — no flag)."""
+def flag(kind: str, cfg: dict | None = None) -> str:
+    """Short card flag for a repellent role kind ('' for lead/neutral). The flag FOLLOWS the
+    penalty: a user who doesn't down-rank this kind (multiplier ≥ 1.0) gets no «не твоё» label —
+    it's user #1's verdict, not a fact about the job (multi-user fix)."""
+    if cfg is not None and multiplier(kind, cfg) >= 1.0:
+        return ""
     return _FLAG.get(kind, "")

@@ -279,7 +279,11 @@ def test_refetch_guard_skips_when_fresh_fetches_when_stale(file_cfg):
         con.execute("INSERT INTO funnel_log (run_at, stage, count) VALUES (?,?,?)", (ts, "slate", 9))
         con.commit()
 
-    _log_slate(1)                                                            # fresh (1h ago)
+    _log_slate(1)                                                            # fresh (1h ago)…
+    # …but an EMPTY DB never skips: the stamp can come from a mere GET /slate.json on a
+    # never-fetched user (live 2026-07-03 — a new user's first fetch was wrongly skipped)
+    assert feedback_app._refetch_guard(con, cfg, force=False)[0] is False
+    _seed_scored(con, "u/guard", score=4)                                    # a real fetch leaves data
     skip, msg = feedback_app._refetch_guard(con, cfg, force=False)
     assert skip is True and "skipping startup fetch" in msg
     assert feedback_app._refetch_guard(con, cfg, force=True)[0] is False     # --refetch overrides
@@ -299,7 +303,7 @@ def test_fetch_status_and_index_surface_skipped_refetch(file_cfg):
     con = db.connect(file_cfg["paths"]["db"])
     seed_scored(con, "u/x", score=5, company="Co")
     con.close()
-    fa._FETCH_STATE.update(fetch_skipped=True, data_age_hours=3.0)
+    fa._fetch_state().update(fetch_skipped=True, data_age_hours=3.0)
     try:
         client = _client(file_cfg)
         st = client.get("/fetch-status").json()
@@ -307,7 +311,7 @@ def test_fetch_status_and_index_surface_skipped_refetch(file_cfg):
         html = client.get("/").text
         assert "не обновлялись" in html and "обновления" in html      # staleness + refetch hint
     finally:
-        fa._FETCH_STATE.update(fetch_skipped=False, data_age_hours=None)
+        fa._fetch_state().update(fetch_skipped=False, data_age_hours=None)
 
 
 def test_role_feedback_writes_sidecar(file_cfg):
@@ -392,17 +396,61 @@ def test_startup_pipeline_retrains_fetches_then_progresses(file_cfg, monkeypatch
     monkeypatch.setattr(fa.memory_guard, "require_headroom", lambda *a, **k: None)
     monkeypatch.setattr(fa.memory_guard, "start_watchdog", lambda: None)
     monkeypatch.setattr(fa.memory_guard, "configure_from_cfg", lambda cfg: None)
-    fa._FETCH_STATE.update(slate_ready=False, running=False)
+    fa._fetch_state().update(slate_ready=False, running=False)
 
     fa._run_startup_pipeline(file_cfg, seed=2)
 
     assert calls["retrain"] == 1                                # retrained (checkpointed) on start
     assert calls["tick_kwargs"]["run_investigate"] is False     # fetch core only; agent batch deferred
     assert calls["investigated"] == [10, 11, 12, 13]            # seed-2 + the rest, top→down
-    assert fa._FETCH_STATE["slate_ready"] is True               # greet trigger flipped
-    assert fa._FETCH_STATE["running"] is False                  # finished
+    assert fa._fetch_state()["slate_ready"] is True               # greet trigger flipped
+    assert fa._fetch_state()["running"] is False                  # finished
     assert fa._FETCH_LOCK.acquire(blocking=False)               # lock released (not wedged)
     fa._FETCH_LOCK.release()
+
+
+def test_startup_pipeline_marks_existing_slate_ready_before_fetch_finishes(file_cfg, monkeypatch):
+    """A slow startup fetch must not block the bot/UI when an already-scored slate exists."""
+    import threading
+
+    import schabasch.feedback_app as fa
+    import schabasch.investigate as inv
+    import schabasch.pipeline as pipe
+    import schabasch.slate as sl
+    import schabasch.triage as tri
+
+    entered_tick = threading.Event()
+    release_tick = threading.Event()
+    con = db.connect(file_cfg["paths"]["db"])
+    _seed_scored(con, "u/ready", score=5)
+    con.close()
+
+    monkeypatch.setattr(tri, "retrain_checkpointed", lambda cfg, con: {"skipped": True})
+    monkeypatch.setattr(sl, "build_slate", lambda cfg, con, d: [{"vacancy_id": 10}])
+    monkeypatch.setattr(inv, "investigate_one", lambda cfg, con, vid: "ok")
+    monkeypatch.setattr(fa.memory_guard, "require_headroom", lambda *a, **k: None)
+    monkeypatch.setattr(fa.memory_guard, "start_watchdog", lambda: None)
+    monkeypatch.setattr(fa.memory_guard, "configure_from_cfg", lambda cfg: None)
+
+    def _slow_tick(cfg, con, **kw):
+        entered_tick.set()
+        assert release_tick.wait(timeout=2)
+        return {"date": "d", "slate": {"size": 1}}
+
+    monkeypatch.setattr(pipe, "nightly_tick", _slow_tick)
+    fa._fetch_state().update(slate_ready=False, running=False)
+
+    t = threading.Thread(target=fa._run_startup_pipeline, args=(file_cfg,),
+                         kwargs={"seed": 0, "quiet": True})
+    t.start()
+    try:
+        assert entered_tick.wait(timeout=2)
+        assert fa._fetch_state()["running"] is True
+        assert fa._fetch_state()["slate_ready"] is True
+    finally:
+        release_tick.set()
+        t.join(timeout=2)
+    assert fa._fetch_state()["running"] is False
 
 
 def test_funnel_surfaces_dedup(file_cfg):

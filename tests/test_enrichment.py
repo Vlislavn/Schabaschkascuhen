@@ -46,7 +46,7 @@ def test_deep_chain_is_single_small_tier_never_sota():
     from schabasch.llm_clients import client_label
     cfg = {"llm": {"roles": {
         "deep_reasoning": {"client": "ollama", "model": "qwen3.5:4b"},
-        "sota": {"client": "openai", "base_url": "https://api.kather.ai/v1", "model": "sota", "api_key": "k"},
+        "sota": {"client": "openai", "base_url": "https://api.example.com/v1", "model": "sota", "api_key": "k"},
         "normalizer": {"client": "ollama", "model": "qwen3:8b"}}},
         "deep": {"enable_sota": True}}
     assert [client_label(c) for c in E._deep_chain(cfg)] == ["qwen3.5:4b", "qwen3:8b"]

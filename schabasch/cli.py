@@ -6,14 +6,26 @@ from pathlib import Path
 
 import typer
 
-from . import candidate, config, db, dedup, features as _features, geo, hardfilters, judge, normalize, pipeline, slate, triage as _triage
+from . import candidate, config, db, dedup, features as _features, geo, hardfilters, judge, normalize, pipeline, slate, triage as _triage, users
 from .sources import arbeitsagentur, jobspy_source
 
 app = typer.Typer(add_completion=False, help="Schabaschkascuhen — a personal dream-job search pipeline")
 
+# Multi-user: `schabasch --user bob <command>` runs the command against bob's overlay cfg + DB
+# (config/users/bob.yaml → data/users/bob/…). None = not specified → the default user, except
+# `tick`, which then loops ALL users sequentially (keeps the nightly plist a single command).
+_USER: str | None = None
+
+
+@app.callback()
+def _global_opts(user: str = typer.Option(None, "--user",
+                                          help="User key (config/users/<key>.yaml); omit = default user")):
+    global _USER
+    _USER = user
+
 
 def _ctx():
-    cfg = config.load()
+    cfg = users.load(_USER)
     con = db.connect(cfg["paths"]["db"])
     return cfg, con
 
@@ -56,9 +68,15 @@ def import_spike():
 def tick(german: bool = typer.Option(False, "--german"),
          budget: int = typer.Option(None, "--budget"),
          tertiary: bool = typer.Option(False, "--tertiary")):
-    """Full nightly run (canary→scrape→details→geo→hard→normalize→judge→slate)."""
-    cfg, con = _ctx()
-    pipeline.nightly_tick(cfg, con, german_queries=german, budget=budget, tertiary=tertiary)
+    """Full nightly run (canary→scrape→details→geo→hard→normalize→judge→slate).
+    No --user → every configured user, sequentially (one model-heavy tick at a time)."""
+    keys = users.list_users() if _USER is None else [_USER]
+    for key in keys:
+        cfg = users.load(key)
+        con = db.connect(cfg["paths"]["db"])
+        if len(keys) > 1:
+            typer.echo(f"═══ tick [user: {key}] ═══")
+        pipeline.nightly_tick(cfg, con, german_queries=german, budget=budget, tertiary=tertiary)
 
 
 @app.command()
@@ -142,7 +160,7 @@ def render(date: str = typer.Option(None, "--date"), out: str = typer.Option(Non
     cfg, con = _ctx()
     d = date or _date.today().isoformat()
     s = slate.build_slate(cfg, con, d)
-    html = slate.render_html(s, d)
+    html = slate.render_html(s, d, user=_USER or "default")
     out_path = Path(out) if out else Path(cfg["paths"]["slate_dir"]) / f"{d}.html"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(html, encoding="utf-8")

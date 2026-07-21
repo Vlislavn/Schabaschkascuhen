@@ -332,6 +332,81 @@ def test_torch_thread_cap_applied():
     assert torch.get_num_threads() == 1
 
 
+# ---------------------------------------------------------------------------
+# llm_coverage CANDIDATE block (fix: judge stopped false-flagging LISTED skills as missing)
+# ---------------------------------------------------------------------------
+
+def test_candidate_cov_block_lists_skills_and_languages():
+    """The coverage CANDIDATE block renders discrete skills one-per-line + languages AHEAD of the
+    prose — an explicit candidate spec, not a comma-blob with languages absent. Generalization:
+    a non-trace candidate (Rust/Kubernetes/French), not the failing case."""
+    block = features._candidate_cov_block(
+        cv_text="Built distributed systems in Rust.",
+        cand_skills=["Rust", "Kubernetes", "Distributed Systems"],
+        languages={"fr": "B2", "en": "C1"},
+    )
+    assert "SKILLS:" in block
+    assert "- Rust" in block and "- Kubernetes" in block
+    assert "LANGUAGES:" in block and "fr=B2" in block and "en=C1" in block
+    assert "PROFILE:" in block and "distributed systems in rust" in block.lower()
+    assert block.index("SKILLS:") < block.index("PROFILE:")   # explicit spec is read first
+
+
+def test_candidate_cov_block_degrades_without_skills():
+    """No skills/languages → just the prose (backward-compatible with the old prose-only block)."""
+    assert features._candidate_cov_block("prose only", None, None) == "PROFILE:\nprose only"
+    assert features._candidate_cov_block("", [], {}) == ""
+
+
+class _StubCovClient:
+    """Captures the (system, user) handed to chat_json; returns a fixed coverage verdict."""
+    def __init__(self, reqs):
+        self.seen: list[tuple[str, str]] = []
+        self._reqs = reqs
+
+    def chat_json(self, system, user):
+        self.seen.append((system, user))
+        return {"requirements": self._reqs, "missing_summary": ""}
+
+
+def test_llm_coverage_feeds_explicit_skills_and_full_cv(con):
+    """Fix: _llm_coverage hands the judge the explicit skills + the FULL cv (not cv[:1500]) so a
+    LISTED skill can be judged present. Different data than the trace (a Go/Kafka candidate)."""
+    features._ensure_schema(con)
+    long_cv = "A" * 1400 + " GOLANG_MARKER " + "B" * 400      # marker sits PAST the old 1500 cap
+    client = _StubCovClient([
+        {"requirement": "Go programming", "verdict": "present"},
+        {"requirement": "Kafka streaming", "verdict": "missing"},
+    ])
+    cov, miss, reqs = features._llm_coverage(
+        con, cache_key="cvX:jdY:test", jd_title="Backend Engineer",
+        jd_desc="Build Go services with Kafka.", cv_text=long_cv, client=client,
+        cand_skills=["Go", "Kafka", "PostgreSQL"], languages={"en": "C1"},
+    )
+    assert len(client.seen) == 1
+    _sys, user = client.seen[0]
+    assert "- Go" in user and "- Kafka" in user               # explicit skills reached the judge
+    assert "en=C1" in user                                     # languages reached the judge
+    assert "GOLANG_MARKER" in user                             # full cv, NOT truncated at 1500
+    assert reqs and any(r["verdict"] == "present" for r in reqs)
+    assert 0.0 <= cov <= 1.0
+
+
+def test_llm_coverage_cache_roundtrip(con):
+    """Stores under the given (versioned) cache_key and serves a second call from cache without
+    re-calling the judge — the recompute-on-version-bump substrate."""
+    features._ensure_schema(con)
+    client = _StubCovClient([{"requirement": "X", "verdict": "present"}])
+    key = "cvA:jdB:c2"
+    features._llm_coverage(con, cache_key=key, jd_title="t", jd_desc="d", cv_text="cv",
+                           client=client, cand_skills=["X"], languages={})
+    assert len(client.seen) == 1
+    cov, miss, reqs = features._llm_coverage(con, cache_key=key, jd_title="t", jd_desc="d",
+                                             cv_text="cv", client=client, cand_skills=["X"], languages={})
+    assert len(client.seen) == 1                               # second call served from cache
+    assert reqs == [{"requirement": "X", "verdict": "present"}]
+
+
 def test_rerank_skips_when_all_fresh(cfg, con, monkeypatch):
     """② rerank_scored re-scoring an already-ranked job is pure waste (deterministic). When every
     candidate already carries a fresh xenc_full it returns 'all_fresh' WITHOUT loading the 2GB

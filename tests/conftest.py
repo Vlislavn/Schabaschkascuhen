@@ -22,7 +22,11 @@ def cfg():
         "profile": {
             "summary": "ML-инженер, Heidelberg, ищет новую область.",
             "scale": {"5": "шабашка", "1": "офисная мышь"},
-            "magnets": ["space"], "repellents": ["biotech"],
+            # full base-profile repellent set: the hard drops are gated per-user on these
+            # (multi-user de-personalization 2026-07-03) — tests exercise the drops ON
+            "magnets": ["space"],
+            "repellents": ["hidden-german", "biotech", "slop-text", "boring-role",
+                           "remote-only", "temp-agency"],
         },
         "search": {
             "queries_en": ["aerospace"], "queries_de": ["Raumfahrt"],

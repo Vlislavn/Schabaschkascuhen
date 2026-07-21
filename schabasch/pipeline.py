@@ -181,6 +181,18 @@ def nightly_tick(cfg: dict, con, *, german_queries: bool = False, budget: int | 
         from .sources import tertiary as _t
         _step("scrape_arbeitnow", lambda: _t.fetch_arbeitnow(cfg, con), summary)
         _step("scrape_gtj", lambda: _t.fetch_germantechjobs(cfg, con), summary)
+    # Funnel-expansion sources (2026-07-03 research, все keyless): person-posts из соцсетей
+    # (Bluesky/Mastodon/Telegram), HN Who-is-hiring, прямые ATS-борды. Каждый opt-in через
+    # config-флаг (не CLI — multi-user tick читает per-user cfg).
+    if search.get("social", False):
+        from .sources import social as _soc
+        _step("scrape_social", lambda: _soc.scrape(cfg, con), summary)
+    if search.get("hn_hiring", False):
+        from .sources import hn_hiring as _hn
+        _step("scrape_hn", lambda: _hn.scrape(cfg, con), summary)
+    if search.get("ats", False):
+        from .sources import ats_boards as _ats
+        _step("scrape_ats", lambda: _ats.scrape(cfg, con), summary)
     _step("details_aa", lambda: arbeitsagentur.fetch_details(cfg, con), summary)
     _step("expire_stale", lambda: expire_stale(cfg, con), summary)
     _step("prefilter_geo", lambda: geo.prefilter(cfg, con), summary)
@@ -231,7 +243,8 @@ def nightly_tick(cfg: dict, con, *, german_queries: bool = False, budget: int | 
         return int(v) if isinstance(v, (int, float)) else 0
     today = summary["date"]
     scraped = sum(_sum_counts(summary.get(k)) for k in
-                  ("scrape_jobspy", "scrape_aa", "scrape_agent", "scrape_arbeitnow", "scrape_gtj"))
+                  ("scrape_jobspy", "scrape_aa", "scrape_agent", "scrape_arbeitnow", "scrape_gtj",
+                   "scrape_social", "scrape_hn", "scrape_ats"))
     new = int(con.execute("SELECT COUNT(*) FROM vacancy WHERE first_seen >= ?",
                           (_started_iso,)).fetchone()[0])
     slate_size = summary.get("slate", {}).get("size") if isinstance(summary.get("slate"), dict) else None
@@ -248,7 +261,8 @@ def nightly_tick(cfg: dict, con, *, german_queries: bool = False, budget: int | 
 
 def _print_summary(s: dict) -> None:
     print(f"\n=== nightly tick {s['date']} (german={s['german']}) ===")
-    for k in ("canary", "scrape_jobspy", "scrape_aa", "scrape_agent", "details_aa",
+    for k in ("canary", "scrape_jobspy", "scrape_aa", "scrape_agent", "scrape_social",
+              "scrape_hn", "scrape_ats", "details_aa",
               "expire_stale", "prefilter_geo", "hardfilters", "dedup_fuzzy", "features", "triage",
               "normalize", "judge", "rerank", "verify_liveness", "investigate", "slate", "enrich"):
         print(f"  {k:16s} {s.get(k)}")

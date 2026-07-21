@@ -3,7 +3,7 @@
 The card showed too little, so the user opened the full JD every time. This adds a "paper-render"-like
 block (the zotero-summarizer pattern): a deterministic EXTRACTIVE pass (bge-reranker ranks JD sentences
 against goal queries → the few sentences that matter) plus an ABSTRACTIVE pass via the model cascade
-(35B-MLX by default, api.kather.ai `sota` for «глупые» high-slop descriptions) producing pros/cons, a
+(35B-MLX by default, a remote `sota` tier for «глупые» high-slop descriptions) producing pros/cons, a
 deeper company read, and a clean re-parse of muddy ads — all grounded in the JD (anti-fabrication).
 
 Frozen-contract-safe: a NEW sidecar (vacancy_enrichment) owned here; keyed by content_hash so reposts
@@ -50,16 +50,23 @@ _SNIPPET_GOALS = [
     ("подвох", "downsides, red flags, hard requirements like a specific degree or fluent German"),
 ]
 
-_SYSTEM = """Ты помогаешь пользователю быстро понять вакансию по её ТЕКСТУ, не открывая оригинал.
-Ориентируйся на профиль, рубрику и предпочтения, уже заданные в системе: цель — найти dream job,
-а не просто любую подходящую вакансию. Верни ТОЛЬКО JSON:
-{
- "pros": [str],            // 2-4 плюса для пользователя, КАЖДЫЙ обоснован текстом вакансии
- "cons": [str],            // 1-3 минуса/подвоха (скрытый немецкий, мастер/PhD, hands-on, рутина…)
- "company_review": str,    // 1-2 предложения: что за компания/команда и как это ложится на цели
+def _system_prompt(cfg: dict | None) -> str:
+    """Per-user enrichment prompt: the old module constant CLAIMED «профиль задан в системе» but
+    never injected it, and the cons examples were user #1's repellents hardcoded («скрытый
+    немецкий, мастер/PhD, hands-on») — user #2 got HER minuses on his cards (multi-user fix)."""
+    p = (cfg or {}).get("profile") or {}
+    summary = str(p.get("summary") or "").strip()
+    reps = ", ".join(str(r) for r in (p.get("repellents") or [])) or "нерелевантный домен, рутина"
+    profile_block = f"ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ:\n{summary}\n\n" if summary else ""
+    return f"""Ты помогаешь пользователю быстро понять вакансию по её ТЕКСТУ, не открывая оригинал.
+{profile_block}Цель — найти dream job ДЛЯ ЭТОГО пользователя, а не просто любую вакансию. Верни ТОЛЬКО JSON:
+{{
+ "pros": [str],            // 2-4 плюса для ЭТОГО пользователя, КАЖДЫЙ обоснован текстом вакансии
+ "cons": [str],            // 1-3 минуса/подвоха именно для него (его отталкиватели: {reps})
+ "company_review": str,    // 1-2 предложения: что за компания/команда и как это ложится на его цели
  "clean_summary": str      // если описание мутное/«AI-слоп» — перескажи простыми словами что это за \
 работа и кого ищут; если и так понятно — пустая строка ""
-}
+}}
 ПРАВИЛА: только по тексту вакансии ниже — НЕ выдумывай зарплату/льготы/факты, которых нет в тексте; \
 если чего-то нет — не пиши. Кратко, по-русски. Без markdown, один валидный JSON-объект."""
 
@@ -138,9 +145,10 @@ def abstractive(cfg: dict, *, jd_title: str, jd_text: str, slop: int) -> tuple[d
     next tier. `slop` is surfaced to the model as context but no longer triggers escalation."""
     truncate = int((cfg.get("llm", {}) or {}).get("desc_truncate_chars", 6000))
     user = f"ВАКАНСИЯ:\nTITLE: {jd_title}\nslop_score: {slop}\n\nОПИСАНИЕ:\n{(jd_text or '')[:truncate]}"
+    system = _system_prompt(cfg)
     for client in _deep_chain(cfg):
         try:
-            obj = client.chat_json(_SYSTEM, user)
+            obj = client.chat_json(system, user)
         except LLMError as e:
             log.info("deep tier %s failed (%s); trying next", client_label(client), e.error_class)
             continue

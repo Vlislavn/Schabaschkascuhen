@@ -68,16 +68,27 @@ def german_required(description: str) -> bool:
     return False
 
 
+def active_repellents(cfg: dict | None) -> set[str]:
+    """Which HARD DROPS are on for THIS user — from cfg.profile.repellents (multi-user fix:
+    the drops used to be unconditional, i.e. user #1's repellents deleted user #2's jobs).
+    No profile/repellents in cfg → the original full drop set (behavior-preserving default)."""
+    reps = ((cfg or {}).get("profile") or {}).get("repellents")
+    if reps is None:
+        return {"hidden-german", "remote-only", "temp-agency"}
+    return {str(r) for r in reps}
+
+
 def apply_hard_filters(cfg: dict, con) -> dict[str, int]:
-    """DESCRIBED → детерминированные отсечения. Возвращает счётчики по причинам."""
+    """DESCRIBED → детерминированные отсечения (гейтятся на repellents пользователя)."""
+    reps = active_repellents(cfg)
     rows = db.by_status(con, Status.DESCRIBED)
     counts = {"language_de": 0, "temp_agency": 0, "kept": 0}
     for row in rows:
-        if german_required(row["description"] or ""):
+        if "hidden-german" in reps and german_required(row["description"] or ""):
             db.set_status(con, row["id"], Status.FILTERED,
                           filter_reason=FilterReason.LANGUAGE_DE)
             counts["language_de"] += 1
-        elif row["is_temp_agency"] == 1:
+        elif "temp-agency" in reps and row["is_temp_agency"] == 1:
             db.set_status(con, row["id"], Status.FILTERED,
                           filter_reason=FilterReason.TEMP_AGENCY)
             counts["temp_agency"] += 1

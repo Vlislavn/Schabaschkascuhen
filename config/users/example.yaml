@@ -1,0 +1,20 @@
+# Overlay for one extra user — copy to config/users/<key>.yaml (key = letters/digits/-/_),
+# or better: register via the Telegram bot (it writes this file for you, CV included).
+# Only list what DIFFERS from config/profile.yaml; everything else is inherited.
+# The user's db / slate_dir / model_dir / golden_csv are AUTO-placed under data/users/<key>/
+# (override under paths: only if you must).
+
+profile:
+  summary: "Who this person is, what work they want (feeds the judge prompt)."
+
+search:
+  queries_en: ["business analyst", "product manager"]   # the code reads queries_en/queries_de
+  queries_de: ["business analyst"]                      # (a bare `queries` key is ignored!)
+  cities: ["Berlin, Germany"]
+
+geo:
+  anchors:            # MUST be a mapping {City: {lat, lon, radius_km}} — a list crashes geo_check
+    Berlin: {lat: 52.5200, lon: 13.4050, radius_km: 40}
+
+telegram:
+  chat_id: 111111111   # REQUIRED, non-zero: this user's own Telegram id — the bot's identity key.

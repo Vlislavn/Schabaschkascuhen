@@ -30,6 +30,26 @@ def test_normalize_education_terms():
     assert E.normalize_education("") is None and E.normalize_education(None) is None
 
 
+# --- shared requirement↔candidate matchers (reused by gaps.py) -----------------------------
+
+def test_meets_education():
+    cand = E.candidate_quals({"education_level": "bachelor"})
+    assert E.meets_education("Bachelor’s degree or PMI accreditation", cand) is True   # level met
+    assert E.meets_education("Master's degree in Computer Science", cand) is False       # master > bachelor
+    assert E.meets_education("Strong understanding of satellite systems", cand) is False  # not a degree
+    assert E.meets_education("Bachelor’s degree", E.candidate_quals(None)) is False       # unknown edu
+
+
+def test_meets_language():
+    cand = E.candidate_quals({"languages": {"en": "C1", "de": "A2", "ru": "C2"}})
+    assert E.meets_language("Fluency in English", cand) is True
+    assert E.meets_language("Fluent in English and Russian", cand) is True
+    assert E.meets_language("Fluency in English and Mandarin", cand) is False   # no Mandarin
+    assert E.meets_language("German C1 (written and spoken)", cand) is False    # de A2 < C1
+    assert E.meets_language("Writing of English-language scientific publications", cand) is False  # no cue
+    assert E.meets_language("Experience with IT systems", cand) is False        # "it" is not Italian
+
+
 def test_candidate_quals():
     q = E.candidate_quals({"education_level": "bachelor", "years_experience": 6,
                            "languages": {"de": "A2", "en": "C1"}})
